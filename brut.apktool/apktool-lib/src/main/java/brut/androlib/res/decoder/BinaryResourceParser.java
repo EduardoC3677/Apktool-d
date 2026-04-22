@@ -24,12 +24,21 @@ import brut.androlib.res.table.*;
 import brut.androlib.res.table.value.*;
 import brut.common.Log;
 import brut.util.BinaryDataInputStream;
+import brut.util.Pair;
 import com.google.common.io.BaseEncoding;
-import org.apache.commons.lang3.tuple.Pair;
 
-import java.io.*;
+import java.io.BufferedInputStream;
+import java.io.InputStream;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
 
 public class BinaryResourceParser {
     private static final String TAG = BinaryResourceParser.class.getName();
@@ -112,7 +121,7 @@ public class BinaryResourceParser {
 
     public void parse(InputStream in) throws AndrolibException {
         reset();
-        mIn = new BinaryDataInputStream(in);
+        mIn = new BinaryDataInputStream(new BufferedInputStream(in));
 
         ResChunkPullParser parser = new ResChunkPullParser(mIn);
         try {

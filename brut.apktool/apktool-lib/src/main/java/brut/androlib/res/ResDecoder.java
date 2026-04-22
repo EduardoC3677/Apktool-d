@@ -34,8 +34,8 @@ import brut.common.Log;
 import brut.directory.Directory;
 import brut.directory.DirectoryException;
 import brut.directory.FileDirectory;
+import brut.util.Pair;
 import com.google.common.collect.Lists;
-import org.apache.commons.lang3.tuple.Pair;
 
 import java.io.*;
 import java.util.*;
@@ -92,14 +92,14 @@ public class ResDecoder {
         ResPackage pkg = mTable.getMainPackage();
 
         Log.i(TAG, "Decoding value resources...");
-        for (ResEntry entry : Lists.newArrayList(pkg.getGroup().listEntries())) {
+        for (ResEntry entry : Lists.newArrayList(listEntries(pkg))) {
             if (entry.getValue() instanceof ResBag) {
                 ((ResBag) entry.getValue()).resolveKeys();
             }
         }
 
         Log.i(TAG, "Decoding file resources...");
-        for (ResEntry entry : Lists.newArrayList(pkg.getGroup().listEntries())) {
+        for (ResEntry entry : Lists.newArrayList(listEntries(pkg))) {
             if (entry.getValue() instanceof ResFileReference) {
                 fileDecoder.decode(entry, inDir, outDir, mResFileMap);
             }
@@ -120,11 +120,15 @@ public class ResDecoder {
         }
     }
 
+    private static Iterable<ResEntry> listEntries(ResPackage pkg) {
+        return pkg.getId() == ResTable.SYS_PACKAGE_ID ? pkg.getGroup().listEntries() : pkg.listEntries();
+    }
+
     private void generateValuesXmls(ResPackage pkg, Directory outDir, ResXmlSerializer serial)
             throws AndrolibException {
         // Group entries by type name + qualifiers, ignoring alias duplicates in sub-packages.
         Map<Pair<String, String>, List<ResEntry>> entriesMap = new HashMap<>();
-        for (ResEntry entry : pkg.getGroup().listEntries()) {
+        for (ResEntry entry : listEntries(pkg)) {
             if (entry.getValue() instanceof ValuesXmlSerializable && !pkg.isAlias(entry.getResId())) {
                 ResType type = entry.getType();
                 Pair<String, String> key = Pair.of(type.getName(), type.getConfig().toQualifiers());
@@ -155,7 +159,6 @@ public class ResDecoder {
 
                 serial.endTag(null, "resources");
                 serial.endDocument();
-                serial.flush();
             } catch (DirectoryException | IOException ex) {
                 throw new AndrolibException("Could not generate: " + outFileName, ex);
             }
@@ -183,7 +186,6 @@ public class ResDecoder {
 
             serial.endTag(null, "resources");
             serial.endDocument();
-            serial.flush();
         } catch (DirectoryException | IOException ex) {
             throw new AndrolibException("Could not generate: " + outFileName, ex);
         }
@@ -191,7 +193,7 @@ public class ResDecoder {
 
     private void generateStagingXmls(ResPackage pkg, Directory outDir, ResXmlSerializer serial)
             throws AndrolibException {
-        if (pkg.getGroup().getPackageCount() <= 1) {
+        if (pkg.getId() != ResTable.SYS_PACKAGE_ID) {
             return;
         }
 
@@ -199,6 +201,9 @@ public class ResDecoder {
         List<ResEntrySpec> subSpecs = new ArrayList<>();
         for (ResPackage subPkg : pkg.getGroup().listSubPackages()) {
             subSpecs.addAll(subPkg.listEntrySpecs());
+        }
+        if (subSpecs.isEmpty()) {
+            return;
         }
         subSpecs.sort(Comparator.comparing(ResEntrySpec::getResId));
 
@@ -257,7 +262,6 @@ public class ResDecoder {
 
                 serial.endTag(null, "resources");
                 serial.endDocument();
-                serial.flush();
             } catch (DirectoryException | IOException ex) {
                 throw new AndrolibException("Could not generate: " + outFileName, ex);
             }
@@ -298,7 +302,6 @@ public class ResDecoder {
 
                 serial.endTag(null, "resources");
                 serial.endDocument();
-                serial.flush();
             } catch (DirectoryException | IOException ex) {
                 throw new AndrolibException("Could not generate: " + outFileName, ex);
             }
@@ -326,7 +329,6 @@ public class ResDecoder {
 
             serial.endTag(null, "resources");
             serial.endDocument();
-            serial.flush();
         } catch (DirectoryException | IOException ex) {
             throw new AndrolibException("Could not generate: " + outFileName, ex);
         }
@@ -352,7 +354,6 @@ public class ResDecoder {
 
             Log.i(TAG, "Decoding AndroidManifest.xml with " + (pkg != null ? "resources" : "only framework resources")
                      + "...");
-
             try (
                 InputStream in = inDir.getFileInput("AndroidManifest.xml");
                 OutputStream out = outDir.getFileOutput("AndroidManifest.xml")
@@ -442,7 +443,7 @@ public class ResDecoder {
                 List<String> usesLibrary = mApkInfo.getUsesLibrary();
                 libPackageIds.sort(null);
                 for (int id : libPackageIds) {
-                    usesLibrary.add(mTable.getDynamicRefPackageName(id));
+                    usesLibrary.add(id == pkg.getId() ? pkg.getName() : mTable.getDynamicRefPackageName(id));
                 }
             }
         } else {
