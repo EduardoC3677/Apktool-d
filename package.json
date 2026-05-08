@@ -1,0 +1,6 @@
+{
+  "type": "module",
+  "dependencies": {
+    "@anthropic-ai/foundry-sdk": "latest"
+  }
+}
