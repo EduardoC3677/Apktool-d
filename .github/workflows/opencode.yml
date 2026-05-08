@@ -17,7 +17,7 @@ on:
       model:
         description: Model to run with OpenCode
         required: false
-        default: anthropic/claude-opus-4-6
+        default: anthropic/claude-opus-4-7
         type: string
 
 concurrency:
@@ -58,7 +58,7 @@ jobs:
       AZURE_API_KEY: ${{ secrets.AZURE_FOUNDRY_API_KEY || secrets.AZURE_API_KEY }}
       AZURE_RESOURCE_NAME: ${{ secrets.AZURE_FOUNDRY_RESOURCE_NAME || secrets.AZURE_RESOURCE_NAME }}
       ANTHROPIC_API_KEY: ${{ secrets.AZURE_FOUNDRY_API_KEY || secrets.AZURE_API_KEY }}
-      RAW_MODEL: ${{ github.event.inputs.model || vars.OPENCODE_MODEL || 'anthropic/claude-opus-4-6' }}
+      RAW_MODEL: ${{ github.event.inputs.model || vars.OPENCODE_MODEL || 'anthropic/claude-opus-4-7' }}
       GITHUB_TOKEN: ${{ github.token }}
 
     steps:
@@ -116,7 +116,7 @@ jobs:
           set -euo pipefail
           curl -fsSL https://ocx.kdco.dev/install.sh | sh
           ocx init --global
-          ocx profile add ws --source tweak/p-nznulpk8 --from https://tweakoc.com/r --global
+          ocx profile add ws --source tweak/p-2se7a6w8 --from https://tweakoc.com/r --global
           
           echo "==> ws profile contents:"
           ls -lah "$HOME/.config/opencode/profiles/ws" || true
