@@ -52,6 +52,11 @@ public class Config {
     private boolean mDebuggable;
     private boolean mNetSecConf;
     private String mAaptBinary;
+    private int mPngCompressionLevel;
+    private boolean mNoResourceRemoval;
+    private boolean mProguardConditionalKeepRules;
+    private boolean mResourceQuarantine;
+    private boolean mStripCrossPackageMetaData;
 
     public Config(String version) {
         mVersion = version;
@@ -81,6 +86,11 @@ public class Config {
         mDebuggable = false;
         mNetSecConf = false;
         mAaptBinary = null;
+        mPngCompressionLevel = -1;
+        mNoResourceRemoval = false;
+        mProguardConditionalKeepRules = false;
+        mResourceQuarantine = true;
+        mStripCrossPackageMetaData = true;
     }
 
     public String getVersion() {
@@ -267,5 +277,57 @@ public class Config {
 
     public void setAaptBinary(String aaptBinary) {
         mAaptBinary = aaptBinary;
+    }
+
+    public int getPngCompressionLevel() {
+        return mPngCompressionLevel;
+    }
+
+    public void setPngCompressionLevel(int level) {
+        if (level < -1 || level > 9) {
+            throw new IllegalArgumentException(
+                "PNG compression level must be between 0 and 9 (or -1 to use aapt2 default), got: " + level);
+        }
+        mPngCompressionLevel = level;
+    }
+
+    public boolean isNoResourceRemoval() {
+        return mNoResourceRemoval;
+    }
+
+    public void setNoResourceRemoval(boolean noResourceRemoval) {
+        mNoResourceRemoval = noResourceRemoval;
+    }
+
+    public boolean isProguardConditionalKeepRules() {
+        return mProguardConditionalKeepRules;
+    }
+
+    public void setProguardConditionalKeepRules(boolean enabled) {
+        mProguardConditionalKeepRules = enabled;
+    }
+
+    /**
+     * Whether apktool should auto-detect resource files that aapt2 cannot
+     * compile (zero-byte PNGs, files with broken/missing image headers, etc.)
+     * and copy them straight into the final apk instead of feeding them to
+     * {@code aapt2 compile}. Some apps (notably TikTok) intentionally ship
+     * empty {@code .png} placeholders that cause {@code aapt2 compile} to
+     * abort with "failed to read PNG signature". Default: {@code true}.
+     */
+    public boolean isResourceQuarantine() {
+        return mResourceQuarantine;
+    }
+
+    public void setResourceQuarantine(boolean enabled) {
+        mResourceQuarantine = enabled;
+    }
+
+    public boolean isStripCrossPackageMetaData() {
+        return mStripCrossPackageMetaData;
+    }
+
+    public void setStripCrossPackageMetaData(boolean enabled) {
+        mStripCrossPackageMetaData = enabled;
     }
 }

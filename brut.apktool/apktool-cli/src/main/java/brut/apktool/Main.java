@@ -190,6 +190,38 @@ public class Main {
         .argName("file")
         .get();
 
+    private static final Option buildPngCompressionLevelOption = Option.builder()
+        .longOpt("png-compression-level")
+        .desc("Set zlib compression level [0-9] for crunched PNGs (aapt2 default: 9).")
+        .hasArg()
+        .argName("level")
+        .get();
+
+    private static final Option buildNoResourceRemovalOption = Option.builder()
+        .longOpt("no-resource-removal")
+        .desc("Disable aapt2 automatic removal of resources without defaults (use for RRO/overlay APKs).")
+        .get();
+
+    private static final Option buildProguardConditionalKeepOption = Option.builder()
+        .longOpt("proguard-conditional-keep-rules")
+        .desc("Generate conditional ProGuard keep rules with aapt2.")
+        .get();
+
+    private static final Option buildNoResourceQuarantineOption = Option.builder()
+        .longOpt("no-resource-quarantine")
+        .desc("Disable auto-quarantine of empty/invalid PNG resources. By default, files that aapt2 cannot "
+            + "compile (zero-byte or non-PNG payloads with .png extension) are packed verbatim into the apk "
+            + "instead of failing the build. Pass this flag to restore strict aapt2 behaviour.")
+        .get();
+
+    private static final Option buildKeepCrossPackageMetaDataOption = Option.builder()
+        .longOpt("keep-cross-package-metadata")
+        .desc("Keep <meta-data> entries that reference resources from external packages "
+            + "(Dynamic Feature / Play Asset Delivery splits). By default these are stripped because "
+            + "aapt2 link cannot resolve them and aborts. Pass this flag if you have already linked "
+            + "the referenced split packages and want to preserve the references.")
+        .get();
+
     private static final Option buildOutputOption = Option.builder("o")
         .longOpt("output")
         .desc("Output the built apk to <file>. (default: dist/name.apk)")
@@ -270,6 +302,11 @@ public class Main {
                 buildOptions.addOption(buildNetSecConfOption);
                 buildOptions.addOption(buildNoApkOption);
                 buildOptions.addOption(buildNoCrunchOption);
+                buildOptions.addOption(buildPngCompressionLevelOption);
+                buildOptions.addOption(buildNoResourceRemovalOption);
+                buildOptions.addOption(buildProguardConditionalKeepOption);
+                buildOptions.addOption(buildNoResourceQuarantineOption);
+                buildOptions.addOption(buildKeepCrossPackageMetaDataOption);
             }
         }
 
@@ -534,6 +571,13 @@ public class Main {
         switch (argList.size()) {
             case 0:
                 apkDirName = "."; // current directory
+                if (!new File(apkDirName, "apktool.yml").isFile()) {
+                    System.err.println("No apktool.yml found in current directory. "
+                        + "Specify the path to a decoded apk directory.");
+                    printUsage();
+                    System.exit(1);
+                    return;
+                }
                 break;
             case 1:
                 apkDirName = argList.get(0);
@@ -591,6 +635,32 @@ public class Main {
                 System.exit(1);
                 return;
             }
+        }
+        if (cli.hasOption(buildPngCompressionLevelOption)) {
+            try {
+                int level = Integer.parseInt(cli.getOptionValue(buildPngCompressionLevelOption));
+                config.setPngCompressionLevel(level);
+            } catch (NumberFormatException ex) {
+                System.err.println("--png-compression-level requires an integer between 0 and 9.");
+                System.exit(1);
+                return;
+            } catch (IllegalArgumentException ex) {
+                System.err.println(ex.getMessage());
+                System.exit(1);
+                return;
+            }
+        }
+        if (cli.hasOption(buildNoResourceRemovalOption)) {
+            config.setNoResourceRemoval(true);
+        }
+        if (cli.hasOption(buildProguardConditionalKeepOption)) {
+            config.setProguardConditionalKeepRules(true);
+        }
+        if (cli.hasOption(buildNoResourceQuarantineOption)) {
+            config.setResourceQuarantine(false);
+        }
+        if (cli.hasOption(buildKeepCrossPackageMetaDataOption)) {
+            config.setStripCrossPackageMetaData(false);
         }
 
         File outFile = null;

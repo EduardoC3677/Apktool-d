@@ -3,6 +3,7 @@ name: Decompile APK/JAR
 on:
   workflow_dispatch:
     inputs:
+      # ----- Source -----
       apk_url:
         description: 'Direct download URL of the APK/APKM/APKS/XAPK/JAR file'
         required: true
@@ -17,38 +18,123 @@ on:
         required: false
         default: ''
         type: string
+
+      # ----- Common decode flags (toggles) -----
+      force:
+        description: 'Force delete destination directory (-f / --force) [APK only]'
+        required: false
+        default: true
+        type: boolean
       no_src:
-        description: 'Do not decode sources (--no-src / -s) [APK only]'
+        description: 'Do not decode sources (-s / --no-src) [APK only]'
+        required: false
+        default: false
+        type: boolean
+      all_src:
+        description: 'Decode all sources in the apk including unknown dex files (-a / --all-src). Conflicts with --no-src. [APK only]'
         required: false
         default: false
         type: boolean
       no_res:
-        description: 'Do not decode resources (--no-res / -r) [APK only]'
+        description: 'Do not decode resources (-r / --no-res) [APK only]'
         required: false
         default: false
         type: boolean
-      force:
-        description: 'Force delete destination directory (--force / -f) [APK only]'
+      only_manifest:
+        description: 'Only decode AndroidManifest.xml without resources (--only-manifest). Conflicts with --no-res. [APK only]'
         required: false
-        default: true
+        default: false
+        type: boolean
+      no_assets:
+        description: 'Do not decode assets (--no-assets) [APK only]'
+        required: false
+        default: false
         type: boolean
       no_debug_info:
-        description: 'Do not write out debug info (--no-debug-info) [APK only]'
+        description: 'Do not include debug info (--no-debug-info). Conflicts with --no-src. [APK only]'
         required: false
         default: false
         type: boolean
       keep_broken_res:
-        description: 'Keep broken resources (--keep-broken-res) [APK only]'
+        description: 'Keep broken resources (--keep-broken-res). Conflicts with --no-res / --only-manifest. [APK only]'
         required: false
         default: false
         type: boolean
-      only_main_classes:
-        description: 'Only disassemble dex classes in root (--only-main-classes) [APK only]'
+      ignore_raw_values:
+        description: 'Ignore raw attribute values in XML resource files (--ignore-raw-values). Conflicts with --no-res. [APK only]'
         required: false
         default: false
         type: boolean
+      match_original:
+        description: 'Keep files closest to original (--match-original). Prevents rebuild. [APK only]'
+        required: false
+        default: false
+        type: boolean
+
+      # ----- Flags with arguments (toggle + value) -----
+      use_res_resolve_mode:
+        description: 'Set the resolve mode for resources (--res-resolve-mode). Conflicts with --no-res / --only-manifest. [APK only]'
+        required: false
+        default: false
+        type: boolean
+      res_resolve_mode:
+        description: 'Resolve mode value: default | greedy | lazy (only applied if use_res_resolve_mode is checked).'
+        required: false
+        default: 'default'
+        type: choice
+        options:
+          - default
+          - greedy
+          - lazy
+
+      use_jobs:
+        description: 'Override the parallel-jobs count (-j / --jobs) [APK only]'
+        required: false
+        default: false
+        type: boolean
+      jobs:
+        description: 'Number of parallel jobs (only applied if use_jobs is checked).'
+        required: false
+        default: '4'
+        type: string
+
+      use_frame_path:
+        description: 'Use a custom framework directory (-p / --frame-path) [APK only]'
+        required: false
+        default: false
+        type: boolean
+      frame_path:
+        description: 'Path to framework files (only applied if use_frame_path is checked).'
+        required: false
+        default: ''
+        type: string
+
+      use_frame_tag:
+        description: 'Use framework files tagged with <tag> (-t / --frame-tag) [APK only]'
+        required: false
+        default: false
+        type: boolean
+      frame_tag:
+        description: 'Framework tag (only applied if use_frame_tag is checked).'
+        required: false
+        default: ''
+        type: string
+
+      # ----- Verbosity -----
+      verbose:
+        description: 'Increase output verbosity (-v)'
+        required: false
+        default: false
+        type: boolean
+      quiet:
+        description: 'Suppress normal output (-q)'
+        required: false
+        default: false
+        type: boolean
+
+      # ----- Misc -----
       extra_args:
-        description: 'Additional apktool decode arguments (space-separated) [APK only]'
+        description: 'Additional raw apktool decode arguments appended last (advanced; space-separated). Use only if the flag you need is not exposed above.'
         required: false
         default: ''
         type: string
@@ -170,7 +256,32 @@ jobs:
       - name: Decompile APK
         if: env.FILE_TYPE == 'apk'
         run: |
+          # Build the apktool argument list. The CLI grammar is:
+          #     apktool [-v|-q] d [decode-options...] <apkFile>
+          # Verbose/quiet are GLOBAL options, must come BEFORE the "d" subcommand.
+          GLOBAL_ARGS=""
+          if [ "${{ inputs.verbose }}" = "true" ]; then
+            GLOBAL_ARGS="$GLOBAL_ARGS -v"
+          fi
+          if [ "${{ inputs.quiet }}" = "true" ]; then
+            GLOBAL_ARGS="$GLOBAL_ARGS -q"
+          fi
+
           DECODE_ARGS="d"
+
+          # ----- Toggle flags (with conflict detection) -----
+          if [ "${{ inputs.no_src }}" = "true" ] && [ "${{ inputs.all_src }}" = "true" ]; then
+            echo "::error::--no-src and --all-src are mutually exclusive."
+            exit 1
+          fi
+          if [ "${{ inputs.no_res }}" = "true" ] && [ "${{ inputs.only_manifest }}" = "true" ]; then
+            echo "::error::--no-res and --only-manifest are mutually exclusive."
+            exit 1
+          fi
+          if [ "${{ inputs.no_src }}" = "true" ] && [ "${{ inputs.no_debug_info }}" = "true" ]; then
+            echo "::error::--no-debug-info has no effect when --no-src is set."
+            exit 1
+          fi
 
           if [ "${{ inputs.force }}" = "true" ]; then
             DECODE_ARGS="$DECODE_ARGS -f"
@@ -178,8 +289,17 @@ jobs:
           if [ "${{ inputs.no_src }}" = "true" ]; then
             DECODE_ARGS="$DECODE_ARGS -s"
           fi
+          if [ "${{ inputs.all_src }}" = "true" ]; then
+            DECODE_ARGS="$DECODE_ARGS -a"
+          fi
           if [ "${{ inputs.no_res }}" = "true" ]; then
             DECODE_ARGS="$DECODE_ARGS -r"
+          fi
+          if [ "${{ inputs.only_manifest }}" = "true" ]; then
+            DECODE_ARGS="$DECODE_ARGS --only-manifest"
+          fi
+          if [ "${{ inputs.no_assets }}" = "true" ]; then
+            DECODE_ARGS="$DECODE_ARGS --no-assets"
           fi
           if [ "${{ inputs.no_debug_info }}" = "true" ]; then
             DECODE_ARGS="$DECODE_ARGS --no-debug-info"
@@ -187,10 +307,46 @@ jobs:
           if [ "${{ inputs.keep_broken_res }}" = "true" ]; then
             DECODE_ARGS="$DECODE_ARGS --keep-broken-res"
           fi
-          if [ "${{ inputs.only_main_classes }}" = "true" ]; then
-            DECODE_ARGS="$DECODE_ARGS --only-main-classes"
+          if [ "${{ inputs.ignore_raw_values }}" = "true" ]; then
+            DECODE_ARGS="$DECODE_ARGS --ignore-raw-values"
+          fi
+          if [ "${{ inputs.match_original }}" = "true" ]; then
+            DECODE_ARGS="$DECODE_ARGS --match-original"
           fi
 
+          # ----- Flags with arguments (only applied when toggle is checked) -----
+          if [ "${{ inputs.use_res_resolve_mode }}" = "true" ]; then
+            MODE="${{ inputs.res_resolve_mode }}"
+            case "$MODE" in
+              default|greedy|lazy) ;;
+              *) echo "::error::res_resolve_mode must be one of: default, greedy, lazy (got '$MODE')."; exit 1 ;;
+            esac
+            DECODE_ARGS="$DECODE_ARGS --res-resolve-mode $MODE"
+          fi
+          if [ "${{ inputs.use_jobs }}" = "true" ]; then
+            JOBS_VAL="${{ inputs.jobs }}"
+            if ! echo "$JOBS_VAL" | grep -Eq '^[0-9]+$'; then
+              echo "::error::jobs must be a positive integer (got '$JOBS_VAL')."
+              exit 1
+            fi
+            DECODE_ARGS="$DECODE_ARGS -j $JOBS_VAL"
+          fi
+          if [ "${{ inputs.use_frame_path }}" = "true" ]; then
+            FRAME_PATH="${{ inputs.frame_path }}"
+            if [ -z "$FRAME_PATH" ]; then
+              echo "::error::use_frame_path is enabled but frame_path is empty."
+              exit 1
+            fi
+            DECODE_ARGS="$DECODE_ARGS -p $FRAME_PATH"
+          fi
+          if [ "${{ inputs.use_frame_tag }}" = "true" ]; then
+            FRAME_TAG="${{ inputs.frame_tag }}"
+            if [ -z "$FRAME_TAG" ]; then
+              echo "::error::use_frame_tag is enabled but frame_tag is empty."
+              exit 1
+            fi
+            DECODE_ARGS="$DECODE_ARGS -t $FRAME_TAG"
+          fi
           EXTRA="${{ inputs.extra_args }}"
           if [ -n "$EXTRA" ]; then
             DECODE_ARGS="$DECODE_ARGS $EXTRA"
@@ -199,8 +355,8 @@ jobs:
           OUTPUT_DIR="/tmp/decompiled-apk"
           DECODE_ARGS="$DECODE_ARGS -o $OUTPUT_DIR"
 
-          echo "Running: java -jar $APKTOOL_JAR $DECODE_ARGS $APK_FILE"
-          java -jar "${{ env.APKTOOL_JAR }}" $DECODE_ARGS "${{ env.APK_FILE }}"
+          echo "Running: java -jar $APKTOOL_JAR $GLOBAL_ARGS $DECODE_ARGS $APK_FILE"
+          java -jar "${{ env.APKTOOL_JAR }}" $GLOBAL_ARGS $DECODE_ARGS "${{ env.APK_FILE }}"
 
           echo "DECOMPILED_DIR=$OUTPUT_DIR" >> "$GITHUB_ENV"
           echo "Decompilation complete."
@@ -211,8 +367,16 @@ jobs:
         run: |
           OUTPUT_DIR="/tmp/decompiled-jar"
 
+          GLOBAL_ARGS=""
+          if [ "${{ inputs.verbose }}" = "true" ]; then
+            GLOBAL_ARGS="$GLOBAL_ARGS -v"
+          fi
+          if [ "${{ inputs.quiet }}" = "true" ]; then
+            GLOBAL_ARGS="$GLOBAL_ARGS -q"
+          fi
+
           echo "Decompiling JAR with apktool..."
-          java -jar "${{ env.APKTOOL_JAR }}" d "${{ env.DOWNLOADED_FILE }}" -o "$OUTPUT_DIR" -f
+          java -jar "${{ env.APKTOOL_JAR }}" $GLOBAL_ARGS d "${{ env.DOWNLOADED_FILE }}" -o "$OUTPUT_DIR" -f
 
           echo "DECOMPILED_DIR=$OUTPUT_DIR" >> "$GITHUB_ENV"
           echo "JAR decompilation complete."

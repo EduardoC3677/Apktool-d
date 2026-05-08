@@ -2,6 +2,134 @@
 
 The steps taken for slicing an official release of Apktool.
 
+### Refreshing prebuilt aapt2 binaries
+
+The `aapt2` binaries shipped under
+`brut.apktool/apktool-lib/src/main/resources/prebuilt/{linux,macosx,windows}/`
+are vendored copies pulled from the Android SDK build-tools package. The
+current vendored revision is build-tools **36.0.0**
+(`Android Asset Packaging Tool (aapt) 2.20-13193326`). To bump them to a
+newer build-tools release run:
+
+```bash
+# Default: bootstrap cmdline-tools, install build-tools via sdkmanager,
+# copy the host-native aapt2 into the matching prebuilt/ folder.
+scripts/refresh-aapt2.sh
+
+# Pin a specific build-tools version (the script defaults to 36.0.0):
+BUILD_TOOLS_VERSION=36.0.0 scripts/refresh-aapt2.sh
+
+# Refresh all three platforms from a single host by downloading the
+# per-OS build-tools archives from dl.google.com directly:
+MIRROR_FROM_REMOTE=1 BUILD_TOOLS_VERSION=36.0.0 scripts/refresh-aapt2.sh
+```
+
+The `dl.google.com` archive layout changed at r36: the platform-suffix
+separator went from `-` (`build-tools_r35-linux.zip`) to `_`
+(`build-tools_r36_linux.zip`). The `remote_archive_token` helper inside the
+script picks the correct form per major revision; if Google ever changes the
+naming scheme again, that helper is the only place to update.
+
+After running, verify the new binaries with `aapt2 version` and run the full
+test suite (`./gradlew build`) before committing.
+
+### Refreshing the bundled Android framework jar
+
+`brut.apktool/apktool-lib/src/main/resources/prebuilt/android-framework.jar`
+is the framework that apktool implicitly links against during `b`/`build` when
+no explicit `-p` is provided. It is **not** a full `android.jar` - apktool
+only needs the resource table and manifest. The current bundled framework is
+**Android 16 (API 36, platform-36_r02)**.
+
+To refresh it from a newer platform release:
+
+1. Download the platform package, e.g.
+   `curl -fSL -O https://dl.google.com/android/repository/platform-36_r02.zip`.
+2. Unzip and locate `android-<api>/android.jar`.
+3. Extract just `AndroidManifest.xml` and `resources.arsc` from `android.jar`.
+4. Repack them - with deterministic timestamps - into a fresh
+   `android-framework.jar`:
+
+   ```bash
+   unzip -j android.jar AndroidManifest.xml resources.arsc -d fwk/
+   (cd fwk && find . -exec touch -t 200801010000.00 {} + && \
+       zip -X -q ../android-framework.jar AndroidManifest.xml resources.arsc)
+   ```
+
+5. Move `android-framework.jar` into the `prebuilt/` folder and run the
+   gradle test suite.
+
+### Exposing new aapt2 features
+
+When a new aapt2 release adds CLI options worth surfacing to apktool users,
+the flags need to be plumbed in three places:
+
+1. `brut.apktool/apktool-lib/src/main/java/brut/androlib/Config.java` -
+   add a backing field, default, getter and setter.
+2. `brut.apktool/apktool-lib/src/main/java/brut/androlib/res/AaptInvoker.java` -
+   forward the value to the `aapt2 compile` or `aapt2 link` command builder.
+3. `brut.apktool/apktool-cli/src/main/java/brut/apktool/Main.java` - declare
+   the `Option`, register it in `loadOptions` (advanced mode unless trivial)
+   and parse it in `cmdBuild` / `cmdDecode`.
+
+Currently exposed advanced build flags backed by aapt2 features include
+`--png-compression-level`, `--no-resource-removal` and
+`--proguard-conditional-keep-rules`. `--enable-sparse-encoding`,
+`--enable-compact-entries`, `--feature-flags`, `--no-compile-sdk-metadata`,
+`--rename-resources-package` and `--warn-manifest-validation` are also wired
+but are driven from `ApkInfo` / `ResourcesInfo` (not from a top-level CLI
+flag) so they round-trip without manual user input.
+
+### aapt2 36 stricter validation - fixture fallout
+
+aapt2 36 stable hardened several validations that previous releases either
+skipped or covered only with `--legacy`. Two patterns observed against the
+in-repo `testapp` fixture were addressed at the fixture level:
+
+1. `<item type="layout" ... format="string">TEXT</item>` (used in
+   `res/values-mcc001/layouts.xml` for the issue #4096 round-trip case) is
+   now rejected with `error: invalid value for type 'layout'. Expected a
+   reference.` - even when `--legacy` is passed. Fixtures must be
+   reference-typed if the resource type is `layout`.
+2. Resources defined under both `xxhdpi` and the explicit `xxhdpi-v4` (or
+   any qualifier whose `-v<N>` floor is implicit) collide at link time with
+   `error: resource '<name>' has a conflicting value for configuration
+   (xxhdpi-v4)`. aapt2 36 normalises these to a single key, so the
+   duplicate folder was removed.
+
+### Natural SDK-version floor stripping
+
+aapt2 36 stamps an implicit `-v<N>` floor onto every binary resource entry
+whose qualifier set requires a minimum SDK level (e.g. any density implies
+v4, `anydpi` implies v21, `round`/`notround` imply v23, color-mode and
+HDR imply v26, grammatical gender implies v34, etc.). Earlier aapt2
+releases left those floors off the binary entry, so apktool's decoder
+emitted folders like `drawable-nodpi` directly. With aapt2 36 the binary
+table reports `sdkVersion = 4` for that entry and the decoder therefore
+produced `drawable-nodpi-v4`, breaking round-trips and 16 tests in
+`BuildAndDecodeApkTest`.
+
+`ResConfig.naturalSdkVersion()` mirrors AOSP's
+`applyVersionForCompatibility` algorithm and returns the implicit floor for
+the current qualifier combination. `computeQualifiers` only emits the
+`-v<N>` suffix when `mSdkVersion > naturalSdkVersion()`, so the implicit
+floor is stripped on decode and the canonical folder name (`drawable-nodpi`,
+`values-round`, `values-feminine`, `values-watch`, ...) is restored. The
+round-trip is now idempotent across `decode -> build -> decode`.
+
+Floor table currently implemented (matches the AOSP source as of
+aapt2 36 / build-tools 36.0.0):
+
+| Qualifier feature                                         | Min SDK |
+| --------------------------------------------------------- | ------- |
+| Grammatical gender (`feminine`, `neuter`, `masculine`)    | 34      |
+| Color mode (`widecg`, `nowidecg`, `highdr`, `lowdr`)      | 26      |
+| Screen-round (`round`, `notround`)                        | 23      |
+| Density `anydpi`                                          | 21      |
+| Smallest/screen width/height in dp (`sw100dp`, `w200dp`)  | 13      |
+| Any `uiMode` type or night mode                           | 8       |
+| Any non-default density, screen-size or screen-long       | 4       |
+
 ### Ensuring proper license headers
 
 _Currently broken after movement to kotlin dsl._
@@ -321,3 +449,126 @@ only wanting to run that one. The asterisk is used to the full path to the test 
 match this with the debugging parameter to debug a specific test. This command can be found below.
 
     ./gradlew :brut.apktool:apktool-lib:test --tests "*BuildAndDecodeTest" --debug-jvm
+
+# Toolchain & dependency policy
+
+## Java compatibility
+
+The minimum supported Java version is **11**. The CI matrix in
+`.github/workflows/build.yml` exercises **JDK 11, 17, and 21** across
+ubuntu/macOS/windows. Release artifacts in `build-release.yml` are built with
+**JDK 21**.
+
+The bytecode target is enforced through `options.release.set(11)` on every
+`JavaCompile` task in `build.gradle.kts`, which guarantees both source-level
+and bytecode-level Java 11 compatibility regardless of which JDK Gradle is
+running under (so a developer on JDK 21 cannot accidentally ship Java 21
+bytecode).
+
+JDK 8 is no longer supported; `javac --release 8` was removed when JDK 21
+flagged it as obsolete.
+
+## smali / baksmali source
+
+`smali` and `smali-baksmali` are pulled directly from **Google Maven**
+(`google()` repository, group `com.android.tools.smali`). They are **not**
+mirrored to Maven Central - any attempt to fetch them from `mavenCentral()`
+will 404. The previous JitPack source for `com.github.iBotPeaches.smali` is
+no longer used; do not re-add the JitPack repository unless Google stops
+publishing.
+
+To bump smali, check the canonical metadata file:
+`https://dl.google.com/android/maven2/com/android/tools/smali/smali/maven-metadata.xml`
+and update both `baksmali` and `smali` versions in
+`gradle/libs.versions.toml` (they are released in lockstep).
+
+## Other dependency bumps
+
+When bumping versions in `gradle/libs.versions.toml`, prefer canonical
+`maven-metadata.xml` over Maven Central's stale `solrsearch` results, which
+have been observed to lag releases for `commons-io` and `guava` by multiple
+versions.
+
+# Hardened build path for obfuscated apks
+
+Apps that aggressively defend against re-engineering (TikTok being the
+canonical example) ship payloads that break the default `apktool b` path
+in three independent ways. As of the changes made on this branch, all
+three are auto-detected and worked around. None of the workarounds
+compromise normal apks.
+
+## 1. Empty / non-PNG `.png` resources
+
+Some apps include thousands of zero-byte placeholder files with the
+`.png` extension. When the file is shipped in the original apk it is
+just a stored zip entry with size 0; aapt2 was never asked to compile
+it. On rebuild, `apktool` writes the file back into `res/<type>/<name>.png`
+and `aapt2 compile --dir <res>` then tries to crunch it, fails with
+"file does not start with PNG signature", and aborts the entire build.
+
+`ApkBuilder.quarantineUncompilableResources` runs before `aapt2 compile`,
+moves every `.png` whose first 8 bytes are not the PNG signature
+(`89 50 4E 47 0D 0A 1A 0A`) to a temporary directory, leaves a
+deterministic 1×1 transparent stub PNG in its place so aapt2 produces
+a valid `.flat` and the resource id stays defined, then post-link
+overwrites the compiled stub in the staging directory with the original
+zero-byte payload before the final zip step. The result is an apk that
+is byte-identical to the original for those entries.
+
+CLI flag: `--no-resource-quarantine` restores strict aapt2 behavior.
+Config knob: `Config#setResourceQuarantine(false)`.
+Default: enabled.
+
+## 2. `<meta-data android:resource="@<other-pkg>:type/name">`
+
+Apps that ship Dynamic Feature / Play Asset Delivery splits embed
+`<meta-data>` entries in the base apk's manifest that point at
+resources in a *different package* (e.g.
+`@com.zhiliaoapp.musically.df_live_cast:xml/splits0`). Those references
+resolve at install time through `PackageManager`; aapt2 link, however,
+treats them as link-time references and aborts with
+"resource not found".
+
+`ResXmlUtils.stripCrossPackageMetaData` removes such entries from the
+manifest before the rebuild and the original `.orig` file is restored
+afterwards. The runtime PackageManager lookup is unaffected because the
+splits ride on a separate apk anyway.
+
+CLI flag: `--keep-cross-package-metadata` keeps them (use only when you
+have already linked the referenced split packages in the same build).
+Config knob: `Config#setStripCrossPackageMetaData(false)`.
+Default: enabled.
+
+## 3. App-package attributes mislabeled as `android:` in binary XML
+
+The most subtle defense: a layout's `XML_RES_ATTRIBUTE` chunk has
+`attr.name` pointing at a resource in the app package (`0x7f060e82` =
+`@attr/c1k`), which resolves correctly to `res-auto`, but the chunk's
+`attr.ns` deliberately points at the string-pool entry for
+`http://schemas.android.com/apk/res/android`. apktool would then write
+the attribute as `android:c1k="..."`, and aapt2 link would abort with
+"attribute android:c1k not found" because no such system attribute
+exists.
+
+Fix in `BinaryXmlResourceParser.getAttributeNamespace`: when the
+attribute's resource id is in the app package (`pkgId == 0x7f`) **and**
+the declared URI is `http://schemas.android.com/apk/res/android`, the
+resource id wins. The attribute is routed to res-auto via
+`getNonDefaultNamespaceUri`. Well-formed apks (where attr.ns honestly
+points at android) are unaffected because their attr.name resolves to
+a system resource id (`pkgId == 0x01`).
+
+`getNonDefaultNamespaceUri` itself was reworked to scan the live
+namespace stack for a non-android URI instead of indexing it with an
+attribute index (a long-standing latent bug).
+
+There is no opt-out flag; the heuristic is deterministic and only fires
+on the precise `(app-package id) ⊕ (android namespace)` mismatch.
+
+## 4. `apktool b` UX guard
+
+`apktool b` with no arguments used to silently default to the current
+directory and crash with `NoSuchFileException: ./apktool.yml` when run
+from anywhere except a decoded apk root. It now refuses up front with a
+short error and prints usage. `apktool b <dir>` is unchanged.
+

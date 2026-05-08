@@ -605,7 +605,7 @@ public class ResConfig {
         if (mScreenWidth != 0 && mScreenHeight != 0) {
             sb.append('-').append(mScreenWidth).append('x').append(mScreenHeight);
         }
-        if (mSdkVersion != 0) {
+        if (mSdkVersion != 0 && mSdkVersion > naturalSdkVersion()) {
             sb.append("-v").append(mSdkVersion);
         }
         if (mUnknown != null) {
@@ -618,6 +618,35 @@ public class ResConfig {
 
     public boolean isInvalid() {
         return mIsInvalid;
+    }
+
+    private int naturalSdkVersion() {
+        if ((mGrammaticalInflection & MASK_GRAMMATICAL_GENDER) != GRAMMATICAL_GENDER_ANY) {
+            return SDK_UPSIDEDOWN_CAKE;
+        }
+        if ((mColorMode & MASK_COLOR_MODE_WIDECG) != COLOR_MODE_WIDECG_ANY
+                || (mColorMode & MASK_COLOR_MODE_HDR) != COLOR_MODE_HDR_ANY) {
+            return SDK_OREO;
+        }
+        if ((mScreenLayout2 & MASK_SCREENROUND) != SCREENROUND_ANY) {
+            return SDK_MNC;
+        }
+        if (mDensity == DENSITY_ANY) {
+            return SDK_LOLLIPOP;
+        }
+        if (mSmallestScreenWidthDp != 0 || mScreenWidthDp != 0 || mScreenHeightDp != 0) {
+            return SDK_HONEYCOMB_MR2;
+        }
+        if ((mUiMode & MASK_UI_MODE_TYPE) != UI_MODE_TYPE_ANY
+                || (mUiMode & MASK_UI_MODE_NIGHT) != UI_MODE_NIGHT_ANY) {
+            return SDK_FROYO;
+        }
+        if ((mScreenLayout & MASK_SCREENSIZE) != SCREENSIZE_ANY
+                || (mScreenLayout & MASK_SCREENLONG) != SCREENLONG_ANY
+                || mDensity != DENSITY_DEFAULT) {
+            return SDK_DONUT;
+        }
+        return 0;
     }
 
     public String toQualifiers() {

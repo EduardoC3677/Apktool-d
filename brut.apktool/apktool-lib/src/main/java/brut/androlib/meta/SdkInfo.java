@@ -19,6 +19,8 @@ package brut.androlib.meta;
 import brut.androlib.res.table.ResConfig;
 import brut.yaml.*;
 
+import java.util.Locale;
+
 public class SdkInfo implements YamlSerializable {
     private String mMinSdkVersion;
     private String mTargetSdkVersion;
@@ -101,7 +103,7 @@ public class SdkInfo implements YamlSerializable {
     }
 
     public static int parseSdkInt(String sdkVersion) {
-        switch (sdkVersion.toUpperCase()) {
+        switch (sdkVersion.toUpperCase(Locale.ROOT)) {
             case "M":
                 return ResConfig.SDK_MNC;
             case "N":

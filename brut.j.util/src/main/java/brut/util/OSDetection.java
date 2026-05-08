@@ -16,9 +16,15 @@
  */
 package brut.util;
 
+import java.util.Locale;
+
 public final class OSDetection {
-    private static final String OS = System.getProperty("os.name").toLowerCase();
-    private static final String BIT = System.getProperty("sun.arch.data.model").toLowerCase();
+    private static final String OS = lower(System.getProperty("os.name"));
+    private static final String BIT = lower(System.getProperty("sun.arch.data.model"));
+
+    private static String lower(String value) {
+        return value != null ? value.toLowerCase(Locale.ROOT) : "";
+    }
 
     private OSDetection() {
         // Private constructor for utility class.
