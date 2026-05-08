@@ -119,8 +119,11 @@ public class ResFileDecoder {
         try (InputStream in = inDir.getFileInput(inFileName)) {
             byte[] head = new byte[8];
             int read = 0;
-            int off;
-            while (read < head.length && (off = in.read(head, read, head.length - read)) != -1) {
+            while (read < head.length) {
+                int off = in.read(head, read, head.length - read);
+                if (off <= 0) {
+                    break;
+                }
                 read += off;
             }
             if (read >= 4 && head[0] == 0x03 && head[1] == 0x00 && head[2] == 0x08 && head[3] == 0x00) {

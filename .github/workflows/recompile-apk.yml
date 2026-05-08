@@ -3,6 +3,7 @@ name: Recompile APK/JAR
 on:
   workflow_dispatch:
     inputs:
+      # ----- Source -----
       decompiled_repo_url:
         description: 'URL of the GitHub repository containing the decompiled APK/JAR (e.g. https://github.com/user/repo)'
         required: true
@@ -12,38 +13,121 @@ on:
         required: false
         default: ''
         type: string
+
+      # ----- Common build flags (toggles) -----
       force:
-        description: 'Force delete destination directory (--force / -f) [APK only]'
+        description: 'Skip changes detection and build all files (-f / --force) [APK only]'
         required: false
         default: true
         type: boolean
+      no_apk:
+        description: 'Disable repacking of built files into a new apk (--no-apk) [APK only]'
+        required: false
+        default: false
+        type: boolean
       no_crunch:
-        description: 'Disable crunching of resource files (--no-crunch / -nc) [APK only]'
+        description: 'Disable crunching of resource files (-nc / --no-crunch) [APK only]'
         required: false
         default: false
         type: boolean
       copy_original:
-        description: 'Copy original AndroidManifest.xml and META-INF (--copy-original / -c) [APK only]'
+        description: 'Copy original AndroidManifest.xml and META-INF (-c / --copy-original) [APK only]'
         required: false
         default: false
         type: boolean
-      shorten_res_paths:
-        description: 'Shorten resource paths (--shorten-res-paths / -srp) [APK only]'
+      debuggable:
+        description: 'Set android:debuggable="true" in AndroidManifest.xml (--debuggable) [APK only]'
         required: false
         default: false
         type: boolean
-      enable_sparse_encoding:
-        description: 'Enable sparse encoding for resources (--enable-sparse-encoding / -ese) [APK only]'
+      net_sec_conf:
+        description: 'Add a permissive network_security_config.xml (--net-sec-conf) [APK only]'
         required: false
         default: false
         type: boolean
-      collapse_res_names:
-        description: 'Collapse resource names (--collapse-res-names / -crn) [APK only]'
+
+      # ----- aapt2-forwarded flags (toggles) -----
+      no_resource_removal:
+        description: 'Disable aapt2 auto-removal of resources without defaults (--no-resource-removal). Use for RRO/overlay APKs. [APK only]'
         required: false
         default: false
         type: boolean
+      proguard_conditional_keep_rules:
+        description: 'Generate conditional ProGuard keep rules with aapt2 (--proguard-conditional-keep-rules) [APK only]'
+        required: false
+        default: false
+        type: boolean
+      no_resource_quarantine:
+        description: 'Disable auto-quarantine of empty/invalid PNGs (--no-resource-quarantine). By default, uncompilable PNGs are packed verbatim. Pass this to restore strict aapt2 behaviour. [APK only]'
+        required: false
+        default: false
+        type: boolean
+      keep_cross_package_metadata:
+        description: 'Keep <meta-data> entries that reference resources from external packages (--keep-cross-package-metadata). By default these are stripped. [APK only]'
+        required: false
+        default: false
+        type: boolean
+
+      # ----- aapt2-forwarded flags (with arguments) -----
+      use_png_compression_level:
+        description: 'Enable --png-compression-level [APK only]'
+        required: false
+        default: false
+        type: boolean
+      png_compression_level:
+        description: 'PNG zlib compression level [0-9] (only applied if "use_png_compression_level" is checked). aapt2 default: 9.'
+        required: false
+        default: '9'
+        type: string
+
+      use_aapt:
+        description: 'Use a custom aapt2 binary (--aapt) [APK only]'
+        required: false
+        default: false
+        type: boolean
+      aapt_path:
+        description: 'Absolute path to a custom aapt2 binary (only applied if "use_aapt" is checked).'
+        required: false
+        default: ''
+        type: string
+
+      use_jobs:
+        description: 'Override the parallel-jobs count (-j / --jobs) [APK only]'
+        required: false
+        default: false
+        type: boolean
+      jobs:
+        description: 'Number of parallel jobs (only applied if "use_jobs" is checked).'
+        required: false
+        default: '4'
+        type: string
+
+      use_frame_path:
+        description: 'Use a custom framework directory (-p / --frame-path) [APK only]'
+        required: false
+        default: false
+        type: boolean
+      frame_path:
+        description: 'Path to framework files (only applied if "use_frame_path" is checked).'
+        required: false
+        default: ''
+        type: string
+
+      # ----- Verbosity -----
+      verbose:
+        description: 'Increase output verbosity (-v)'
+        required: false
+        default: false
+        type: boolean
+      quiet:
+        description: 'Suppress normal output (-q)'
+        required: false
+        default: false
+        type: boolean
+
+      # ----- Misc -----
       extra_args:
-        description: 'Additional apktool build arguments (space-separated) [APK only]'
+        description: 'Additional raw apktool build arguments appended last (advanced; space-separated). Use only if the flag you need is not exposed above.'
         required: false
         default: ''
         type: string
@@ -163,10 +247,25 @@ jobs:
       - name: Recompile APK
         if: env.SOURCE_TYPE == 'apk'
         run: |
+          # Build the apktool argument list. The CLI grammar is:
+          #     apktool [-v|-q] b [build-options...] <apkDir>
+          # Verbose/quiet are GLOBAL options, must come BEFORE the "b" subcommand.
+          GLOBAL_ARGS=""
+          if [ "${{ inputs.verbose }}" = "true" ]; then
+            GLOBAL_ARGS="$GLOBAL_ARGS -v"
+          fi
+          if [ "${{ inputs.quiet }}" = "true" ]; then
+            GLOBAL_ARGS="$GLOBAL_ARGS -q"
+          fi
+
           BUILD_ARGS="b"
 
+          # ----- Toggle flags -----
           if [ "${{ inputs.force }}" = "true" ]; then
             BUILD_ARGS="$BUILD_ARGS -f"
+          fi
+          if [ "${{ inputs.no_apk }}" = "true" ]; then
+            BUILD_ARGS="$BUILD_ARGS --no-apk"
           fi
           if [ "${{ inputs.no_crunch }}" = "true" ]; then
             BUILD_ARGS="$BUILD_ARGS -nc"
@@ -174,16 +273,58 @@ jobs:
           if [ "${{ inputs.copy_original }}" = "true" ]; then
             BUILD_ARGS="$BUILD_ARGS -c"
           fi
-          if [ "${{ inputs.shorten_res_paths }}" = "true" ]; then
-            BUILD_ARGS="$BUILD_ARGS --shorten-res-paths"
+          if [ "${{ inputs.debuggable }}" = "true" ]; then
+            BUILD_ARGS="$BUILD_ARGS --debuggable"
           fi
-          if [ "${{ inputs.enable_sparse_encoding }}" = "true" ]; then
-            BUILD_ARGS="$BUILD_ARGS --enable-sparse-encoding"
+          if [ "${{ inputs.net_sec_conf }}" = "true" ]; then
+            BUILD_ARGS="$BUILD_ARGS --net-sec-conf"
           fi
-          if [ "${{ inputs.collapse_res_names }}" = "true" ]; then
-            BUILD_ARGS="$BUILD_ARGS --collapse-res-names"
+          if [ "${{ inputs.no_resource_removal }}" = "true" ]; then
+            BUILD_ARGS="$BUILD_ARGS --no-resource-removal"
+          fi
+          if [ "${{ inputs.proguard_conditional_keep_rules }}" = "true" ]; then
+            BUILD_ARGS="$BUILD_ARGS --proguard-conditional-keep-rules"
+          fi
+          if [ "${{ inputs.no_resource_quarantine }}" = "true" ]; then
+            BUILD_ARGS="$BUILD_ARGS --no-resource-quarantine"
+          fi
+          if [ "${{ inputs.keep_cross_package_metadata }}" = "true" ]; then
+            BUILD_ARGS="$BUILD_ARGS --keep-cross-package-metadata"
           fi
 
+          # ----- Flags with arguments (only applied when their toggle is checked) -----
+          if [ "${{ inputs.use_png_compression_level }}" = "true" ]; then
+            LEVEL="${{ inputs.png_compression_level }}"
+            if ! echo "$LEVEL" | grep -Eq '^[0-9]$'; then
+              echo "::error::png_compression_level must be a single digit 0-9 (got '$LEVEL')."
+              exit 1
+            fi
+            BUILD_ARGS="$BUILD_ARGS --png-compression-level $LEVEL"
+          fi
+          if [ "${{ inputs.use_aapt }}" = "true" ]; then
+            AAPT_PATH="${{ inputs.aapt_path }}"
+            if [ -z "$AAPT_PATH" ]; then
+              echo "::error::use_aapt is enabled but aapt_path is empty."
+              exit 1
+            fi
+            BUILD_ARGS="$BUILD_ARGS --aapt $AAPT_PATH"
+          fi
+          if [ "${{ inputs.use_jobs }}" = "true" ]; then
+            JOBS_VAL="${{ inputs.jobs }}"
+            if ! echo "$JOBS_VAL" | grep -Eq '^[0-9]+$'; then
+              echo "::error::jobs must be a positive integer (got '$JOBS_VAL')."
+              exit 1
+            fi
+            BUILD_ARGS="$BUILD_ARGS -j $JOBS_VAL"
+          fi
+          if [ "${{ inputs.use_frame_path }}" = "true" ]; then
+            FRAME_PATH="${{ inputs.frame_path }}"
+            if [ -z "$FRAME_PATH" ]; then
+              echo "::error::use_frame_path is enabled but frame_path is empty."
+              exit 1
+            fi
+            BUILD_ARGS="$BUILD_ARGS -p $FRAME_PATH"
+          fi
           EXTRA="${{ inputs.extra_args }}"
           if [ -n "$EXTRA" ]; then
             BUILD_ARGS="$BUILD_ARGS $EXTRA"
@@ -192,15 +333,15 @@ jobs:
           OUTPUT_DIR="/tmp/recompiled-output"
           BUILD_ARGS="$BUILD_ARGS -o $OUTPUT_DIR/${{ env.REPO_NAME }}.apk"
 
-          echo "Running: java -jar $APKTOOL_JAR $BUILD_ARGS $DECOMPILED_DIR"
-          java -jar "${{ env.APKTOOL_JAR }}" $BUILD_ARGS "${{ env.DECOMPILED_DIR }}"
+          echo "Running: java -jar $APKTOOL_JAR $GLOBAL_ARGS $BUILD_ARGS $DECOMPILED_DIR"
+          java -jar "${{ env.APKTOOL_JAR }}" $GLOBAL_ARGS $BUILD_ARGS "${{ env.DECOMPILED_DIR }}"
 
           echo "OUTPUT_DIR=$OUTPUT_DIR" >> "$GITHUB_ENV"
           echo "Recompilation complete."
           ls -la "$OUTPUT_DIR"
 
       - name: Zipalign APK
-        if: env.SOURCE_TYPE == 'apk'
+        if: env.SOURCE_TYPE == 'apk' && inputs.no_apk != true
         run: |
           ANDROID_HOME=/tmp/android-sdk
           export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
@@ -221,7 +362,7 @@ jobs:
           ls -la "$INPUT_APK"
 
       - name: Sign APK with ehcosmart key
-        if: env.SOURCE_TYPE == 'apk'
+        if: env.SOURCE_TYPE == 'apk' && inputs.no_apk != true
         run: |
           ANDROID_HOME=/tmp/android-sdk
           APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
@@ -247,8 +388,16 @@ jobs:
           OUTPUT_DIR="/tmp/recompiled-output"
           mkdir -p "$OUTPUT_DIR"
 
+          GLOBAL_ARGS=""
+          if [ "${{ inputs.verbose }}" = "true" ]; then
+            GLOBAL_ARGS="$GLOBAL_ARGS -v"
+          fi
+          if [ "${{ inputs.quiet }}" = "true" ]; then
+            GLOBAL_ARGS="$GLOBAL_ARGS -q"
+          fi
+
           echo "Recompiling JAR with apktool..."
-          java -jar "${{ env.APKTOOL_JAR }}" b "${{ env.DECOMPILED_DIR }}" \
+          java -jar "${{ env.APKTOOL_JAR }}" $GLOBAL_ARGS b "${{ env.DECOMPILED_DIR }}" \
             -o "$OUTPUT_DIR/${{ env.REPO_NAME }}.jar"
 
           echo "OUTPUT_DIR=$OUTPUT_DIR" >> "$GITHUB_ENV"
@@ -271,7 +420,7 @@ jobs:
           fi
           echo "- **Source Type:** ${{ env.SOURCE_TYPE }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Output:** ${{ env.REPO_NAME }}.${{ env.SOURCE_TYPE }}" >> "$GITHUB_STEP_SUMMARY"
-          if [ "${{ env.SOURCE_TYPE }}" = "apk" ]; then
+          if [ "${{ env.SOURCE_TYPE }}" = "apk" ] && [ "${{ inputs.no_apk }}" != "true" ]; then
             echo "- **Zipaligned:** ✅ Yes" >> "$GITHUB_STEP_SUMMARY"
             echo "- **Signed:** ✅ ehcosmart (O=ehcosmart)" >> "$GITHUB_STEP_SUMMARY"
           fi

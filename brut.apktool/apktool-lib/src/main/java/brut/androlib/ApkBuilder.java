@@ -525,7 +525,7 @@ public class ApkBuilder {
             int read = 0;
             while (read < 8) {
                 int n = in.read(sig, read, 8 - read);
-                if (n < 0) {
+                if (n <= 0) {
                     break;
                 }
                 read += n;

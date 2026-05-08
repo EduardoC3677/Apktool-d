@@ -210,6 +210,12 @@ public final class ResXmlUtils {
      * @return Number of removed {@code <meta-data>} entries.
      */
     public static int stripCrossPackageMetaData(File file, String ownPackage) {
+        // Without an own-package reference, we cannot reliably distinguish a
+        // cross-package reference from a self-reference, so the heuristic is
+        // skipped to avoid incorrectly removing valid <meta-data> entries.
+        if (ownPackage == null || ownPackage.isEmpty()) {
+            return 0;
+        }
         int removed = 0;
         try {
             Document doc = XmlUtils.loadDocument(file);
@@ -223,11 +229,14 @@ public final class ResXmlUtils {
                     continue;
                 }
                 String value = resourceAttr.getNodeValue();
-                if (!value.startsWith("@") || !value.contains(":")) {
+                if (value == null || value.length() < 3 || !value.startsWith("@") || !value.contains(":")) {
                     continue;
                 }
                 int colon = value.indexOf(':');
                 int pkgStart = value.charAt(1) == '+' ? 2 : 1;
+                if (colon <= pkgStart) {
+                    continue;
+                }
                 String pkg = value.substring(pkgStart, colon);
                 if (pkg.isEmpty() || pkg.equals("android") || pkg.equals(ownPackage)) {
                     continue;
