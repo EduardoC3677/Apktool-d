@@ -190,6 +190,23 @@ public class Main {
         .argName("file")
         .get();
 
+    private static final Option buildPngCompressionLevelOption = Option.builder()
+        .longOpt("png-compression-level")
+        .desc("Set zlib compression level [0-9] for crunched PNGs (aapt2 default: 9).")
+        .hasArg()
+        .argName("level")
+        .get();
+
+    private static final Option buildNoResourceRemovalOption = Option.builder()
+        .longOpt("no-resource-removal")
+        .desc("Disable aapt2 automatic removal of resources without defaults (use for RRO/overlay APKs).")
+        .get();
+
+    private static final Option buildProguardConditionalKeepOption = Option.builder()
+        .longOpt("proguard-conditional-keep-rules")
+        .desc("Generate conditional ProGuard keep rules with aapt2.")
+        .get();
+
     private static final Option buildOutputOption = Option.builder("o")
         .longOpt("output")
         .desc("Output the built apk to <file>. (default: dist/name.apk)")
@@ -270,6 +287,9 @@ public class Main {
                 buildOptions.addOption(buildNetSecConfOption);
                 buildOptions.addOption(buildNoApkOption);
                 buildOptions.addOption(buildNoCrunchOption);
+                buildOptions.addOption(buildPngCompressionLevelOption);
+                buildOptions.addOption(buildNoResourceRemovalOption);
+                buildOptions.addOption(buildProguardConditionalKeepOption);
             }
         }
 
@@ -591,6 +611,26 @@ public class Main {
                 System.exit(1);
                 return;
             }
+        }
+        if (cli.hasOption(buildPngCompressionLevelOption)) {
+            try {
+                int level = Integer.parseInt(cli.getOptionValue(buildPngCompressionLevelOption));
+                config.setPngCompressionLevel(level);
+            } catch (NumberFormatException ex) {
+                System.err.println("--png-compression-level requires an integer between 0 and 9.");
+                System.exit(1);
+                return;
+            } catch (IllegalArgumentException ex) {
+                System.err.println(ex.getMessage());
+                System.exit(1);
+                return;
+            }
+        }
+        if (cli.hasOption(buildNoResourceRemovalOption)) {
+            config.setNoResourceRemoval(true);
+        }
+        if (cli.hasOption(buildProguardConditionalKeepOption)) {
+            config.setProguardConditionalKeepRules(true);
         }
 
         File outFile = null;

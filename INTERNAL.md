@@ -2,6 +2,46 @@
 
 The steps taken for slicing an official release of Apktool.
 
+### Refreshing prebuilt aapt2 binaries
+
+The `aapt2` binaries shipped under
+`brut.apktool/apktool-lib/src/main/resources/prebuilt/{linux,macosx,windows}/`
+are vendored copies pulled from the Android SDK build-tools package. To bump
+them to a newer build-tools release run:
+
+```bash
+# Default: bootstrap cmdline-tools, install build-tools via sdkmanager,
+# copy the host-native aapt2 into the matching prebuilt/ folder.
+scripts/refresh-aapt2.sh
+
+# Pin a specific build-tools version:
+BUILD_TOOLS_VERSION=35.0.0 scripts/refresh-aapt2.sh
+
+# Refresh all three platforms from a single host by downloading the
+# per-OS build-tools archives from dl.google.com directly:
+MIRROR_FROM_REMOTE=1 BUILD_TOOLS_VERSION=35.0.0 scripts/refresh-aapt2.sh
+```
+
+After running, verify the new binaries with `aapt2 version` and run the full
+test suite (`./gradlew build`) before committing.
+
+### Exposing new aapt2 features
+
+When a new aapt2 release adds CLI options worth surfacing to apktool users,
+the flags need to be plumbed in three places:
+
+1. `brut.apktool/apktool-lib/src/main/java/brut/androlib/Config.java` -
+   add a backing field, default, getter and setter.
+2. `brut.apktool/apktool-lib/src/main/java/brut/androlib/res/AaptInvoker.java` -
+   forward the value to the `aapt2 compile` or `aapt2 link` command builder.
+3. `brut.apktool/apktool-cli/src/main/java/brut/apktool/Main.java` - declare
+   the `Option`, register it in `loadOptions` (advanced mode unless trivial)
+   and parse it in `cmdBuild` / `cmdDecode`.
+
+Currently exposed advanced build flags backed by aapt2 features include
+`--png-compression-level`, `--no-resource-removal` and
+`--proguard-conditional-keep-rules`.
+
 ### Ensuring proper license headers
 
 _Currently broken after movement to kotlin dsl._

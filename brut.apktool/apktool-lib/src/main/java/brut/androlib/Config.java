@@ -52,6 +52,9 @@ public class Config {
     private boolean mDebuggable;
     private boolean mNetSecConf;
     private String mAaptBinary;
+    private int mPngCompressionLevel;
+    private boolean mNoResourceRemoval;
+    private boolean mProguardConditionalKeepRules;
 
     public Config(String version) {
         mVersion = version;
@@ -81,6 +84,9 @@ public class Config {
         mDebuggable = false;
         mNetSecConf = false;
         mAaptBinary = null;
+        mPngCompressionLevel = -1;
+        mNoResourceRemoval = false;
+        mProguardConditionalKeepRules = false;
     }
 
     public String getVersion() {
@@ -267,5 +273,33 @@ public class Config {
 
     public void setAaptBinary(String aaptBinary) {
         mAaptBinary = aaptBinary;
+    }
+
+    public int getPngCompressionLevel() {
+        return mPngCompressionLevel;
+    }
+
+    public void setPngCompressionLevel(int level) {
+        if (level < -1 || level > 9) {
+            throw new IllegalArgumentException(
+                "PNG compression level must be between 0 and 9 (or -1 to use aapt2 default), got: " + level);
+        }
+        mPngCompressionLevel = level;
+    }
+
+    public boolean isNoResourceRemoval() {
+        return mNoResourceRemoval;
+    }
+
+    public void setNoResourceRemoval(boolean noResourceRemoval) {
+        mNoResourceRemoval = noResourceRemoval;
+    }
+
+    public boolean isProguardConditionalKeepRules() {
+        return mProguardConditionalKeepRules;
+    }
+
+    public void setProguardConditionalKeepRules(boolean enabled) {
+        mProguardConditionalKeepRules = enabled;
     }
 }

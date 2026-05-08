@@ -84,6 +84,11 @@ public class AaptInvoker {
                 cmd.add("--no-crunch");
             }
 
+            if (mConfig.getPngCompressionLevel() >= 0) {
+                cmd.add("--png-compression-level");
+                cmd.add(Integer.toString(mConfig.getPngCompressionLevel()));
+            }
+
             try {
                 OS.exec(cmd.toArray(new String[0]));
                 Log.d(TAG, "aapt2 compile command ran: " + cmd.toString());
@@ -164,6 +169,14 @@ public class AaptInvoker {
         cmd.add("--no-version-transitions");
         cmd.add("--no-resource-deduping");
         cmd.add("--no-compile-sdk-metadata");
+
+        if (mConfig.isNoResourceRemoval()) {
+            cmd.add("--no-resource-removal");
+        }
+
+        if (mConfig.isProguardConditionalKeepRules()) {
+            cmd.add("--proguard-conditional-keep-rules");
+        }
 
         // #3427 - Ignore stricter parsing during aapt2.
         cmd.add("--warn-manifest-validation");
