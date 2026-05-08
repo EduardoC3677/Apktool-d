@@ -10,6 +10,7 @@ on:
       repo_owner:
         description: 'GitHub user or organization where the repository will be created'
         required: true
+        default: 'EduardoC3677'
         type: string
       repo_name:
         description: 'Repository name override (leave empty to auto-generate from package name)'
@@ -63,7 +64,7 @@ jobs:
       - uses: actions/setup-java@v5
         with:
           distribution: 'zulu'
-          java-version: 17
+          java-version: 21
 
       - name: Download apktool from latest release
         env:
