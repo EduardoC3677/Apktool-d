@@ -35,7 +35,7 @@ public class AndResGuardTest extends BaseTest {
         File testDir = new File(testApk + ".out");
         new ApkDecoder(testApk, sConfig).decode(testDir);
 
-        assertTrue(new File(testDir, "res/mipmap-hdpi-v4/a.png").isFile());
+        assertTrue(new File(testDir, "res/mipmap-hdpi/a.png").isFile());
     }
 
     @Test

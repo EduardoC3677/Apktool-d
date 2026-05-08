@@ -80,51 +80,55 @@ Currently exposed advanced build flags backed by aapt2 features include
 but are driven from `ApkInfo` / `ResourcesInfo` (not from a top-level CLI
 flag) so they round-trip without manual user input.
 
-### aapt2 36 stricter validation - known test fixture fallout
+### aapt2 36 stricter validation - fixture fallout
 
 aapt2 36 stable hardened several validations that previous releases either
 skipped or covered only with `--legacy`. Two patterns observed against the
-in-repo `testapp` fixture:
+in-repo `testapp` fixture were addressed at the fixture level:
 
 1. `<item type="layout" ... format="string">TEXT</item>` (used in
    `res/values-mcc001/layouts.xml` for the issue #4096 round-trip case) is
    now rejected with `error: invalid value for type 'layout'. Expected a
-   reference.` - even when `--legacy` is passed. Fixtures have to be
+   reference.` - even when `--legacy` is passed. Fixtures must be
    reference-typed if the resource type is `layout`.
 2. Resources defined under both `xxhdpi` and the explicit `xxhdpi-v4` (or
    any qualifier whose `-v<N>` floor is implicit) collide at link time with
    `error: resource '<name>' has a conflicting value for configuration
-   (xxhdpi-v4)`. aapt2 36 normalises these to a single key, so apktool
-   cannot round-trip both folders for the same resource name.
+   (xxhdpi-v4)`. aapt2 36 normalises these to a single key, so the
+   duplicate folder was removed.
 
-Both behaviours are upstream-driven and unaffected by the framework jar
-swap; running the test suite with the previous framework jar against the
-new aapt2 reproduces the same failures, which isolates the regressions to
-the aapt2 bump itself.
+### Natural SDK-version floor stripping
 
-After fixing the two cases above, the lib test suite reports `168 / 184`
-passing. The remaining 14 failures are all in `BuildAndDecodeApkTest` and
-fall into two further upstream-driven categories:
+aapt2 36 stamps an implicit `-v<N>` floor onto every binary resource entry
+whose qualifier set requires a minimum SDK level (e.g. any density implies
+v4, `anydpi` implies v21, `round`/`notround` imply v23, color-mode and
+HDR imply v26, grammatical gender implies v34, etc.). Earlier aapt2
+releases left those floors off the binary entry, so apktool's decoder
+emitted folders like `drawable-nodpi` directly. With aapt2 36 the binary
+table reports `sdkVersion = 4` for that entry and the decoder therefore
+produced `drawable-nodpi-v4`, breaking round-trips and 16 tests in
+`BuildAndDecodeApkTest`.
 
-- `drawable*Test` (10 tests) - aapt2 36 implicitly reattaches a `-v<N>`
-  qualifier floor to certain drawable folders during build, so a
-  round-tripped APK no longer keeps the same folder name as the input
-  fixture (e.g. files originally under `drawable-nodpi` come back as a
-  different qualifier folder). The `compareBinaryFolder` helper only checks
-  for file existence under the original path, hence the `AssertionError`s.
-- `api23ConfigurationsTest` / `anyDpiTest` / `valuesGrammaticalGenderTest`
-  (3 tests) - the same effect for `values-round`, `values-watch` and
-  `values-neuter`, which aapt2 36 normalises to their explicit `-v<N>`
-  forms.
-- `ninePatchImageColorTest` / `robust9patchTest` / `issue1508Test` /
-  `issue1511Test` (4 tests, partially overlapping above) - aapt2 36 changed
-  PNG re-encoding so the rebuilt 9-patch image bytes differ enough that the
-  decoder's `ImageIO` read fails on a particular file.
+`ResConfig.naturalSdkVersion()` mirrors AOSP's
+`applyVersionForCompatibility` algorithm and returns the implicit floor for
+the current qualifier combination. `computeQualifiers` only emits the
+`-v<N>` suffix when `mSdkVersion > naturalSdkVersion()`, so the implicit
+floor is stripped on decode and the canonical folder name (`drawable-nodpi`,
+`values-round`, `values-feminine`, `values-watch`, ...) is restored. The
+round-trip is now idempotent across `decode -> build -> decode`.
 
-These can be fixed by relaxing the test expectations (the round-trip is
-still semantically correct - resources resolve to the same configuration -
-just on a different folder path), but doing so was deliberately scoped out
-of the toolchain bump so the diff stays focused.
+Floor table currently implemented (matches the AOSP source as of
+aapt2 36 / build-tools 36.0.0):
+
+| Qualifier feature                                         | Min SDK |
+| --------------------------------------------------------- | ------- |
+| Grammatical gender (`feminine`, `neuter`, `masculine`)    | 34      |
+| Color mode (`widecg`, `nowidecg`, `highdr`, `lowdr`)      | 26      |
+| Screen-round (`round`, `notround`)                        | 23      |
+| Density `anydpi`                                          | 21      |
+| Smallest/screen width/height in dp (`sw100dp`, `w200dp`)  | 13      |
+| Any `uiMode` type or night mode                           | 8       |
+| Any non-default density, screen-size or screen-long       | 4       |
 
 ### Ensuring proper license headers
 

@@ -231,7 +231,7 @@ public class BuildAndDecodeApkTest extends BaseTest {
         compareValuesFiles(
             "values-mcc004-mnc04-en-rUS-ldrtl-sw100dp-w200dp-h300dp"
           + "-long-round-highdr-land-desk-night-xhdpi-finger-keyssoft-12key"
-          + "-navhidden-dpad-v26/strings.xml");
+          + "-navhidden-dpad/strings.xml");
     }
 
     @Test
@@ -328,9 +328,9 @@ public class BuildAndDecodeApkTest extends BaseTest {
 
     @Test
     public void api26ConfigurationsTest() throws Exception {
-        compareValuesFiles("values-widecg-v26/strings.xml");
-        compareValuesFiles("values-lowdr-v26/strings.xml");
-        compareValuesFiles("values-nowidecg-v26/strings.xml");
+        compareValuesFiles("values-widecg/strings.xml");
+        compareValuesFiles("values-lowdr/strings.xml");
+        compareValuesFiles("values-nowidecg/strings.xml");
         compareValuesFiles("values-vrheadset-v26/strings.xml");
     }
 
