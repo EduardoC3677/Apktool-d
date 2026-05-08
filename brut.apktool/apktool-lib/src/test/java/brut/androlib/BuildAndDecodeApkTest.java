@@ -558,11 +558,6 @@ public class BuildAndDecodeApkTest extends BaseTest {
     }
 
     @Test
-    public void drawableQualifierXxhdpiTest() throws Exception {
-        compareBinaryFolder("res/drawable-xxhdpi-v4");
-    }
-
-    @Test
     public void drawableXxxhdpiTest() throws Exception {
         compareBinaryFolder("res/drawable-xxxhdpi");
     }

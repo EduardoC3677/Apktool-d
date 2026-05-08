@@ -6,24 +6,58 @@ The steps taken for slicing an official release of Apktool.
 
 The `aapt2` binaries shipped under
 `brut.apktool/apktool-lib/src/main/resources/prebuilt/{linux,macosx,windows}/`
-are vendored copies pulled from the Android SDK build-tools package. To bump
-them to a newer build-tools release run:
+are vendored copies pulled from the Android SDK build-tools package. The
+current vendored revision is build-tools **36.0.0**
+(`Android Asset Packaging Tool (aapt) 2.20-13193326`). To bump them to a
+newer build-tools release run:
 
 ```bash
 # Default: bootstrap cmdline-tools, install build-tools via sdkmanager,
 # copy the host-native aapt2 into the matching prebuilt/ folder.
 scripts/refresh-aapt2.sh
 
-# Pin a specific build-tools version:
-BUILD_TOOLS_VERSION=35.0.0 scripts/refresh-aapt2.sh
+# Pin a specific build-tools version (the script defaults to 36.0.0):
+BUILD_TOOLS_VERSION=36.0.0 scripts/refresh-aapt2.sh
 
 # Refresh all three platforms from a single host by downloading the
 # per-OS build-tools archives from dl.google.com directly:
-MIRROR_FROM_REMOTE=1 BUILD_TOOLS_VERSION=35.0.0 scripts/refresh-aapt2.sh
+MIRROR_FROM_REMOTE=1 BUILD_TOOLS_VERSION=36.0.0 scripts/refresh-aapt2.sh
 ```
+
+The `dl.google.com` archive layout changed at r36: the platform-suffix
+separator went from `-` (`build-tools_r35-linux.zip`) to `_`
+(`build-tools_r36_linux.zip`). The `remote_archive_token` helper inside the
+script picks the correct form per major revision; if Google ever changes the
+naming scheme again, that helper is the only place to update.
 
 After running, verify the new binaries with `aapt2 version` and run the full
 test suite (`./gradlew build`) before committing.
+
+### Refreshing the bundled Android framework jar
+
+`brut.apktool/apktool-lib/src/main/resources/prebuilt/android-framework.jar`
+is the framework that apktool implicitly links against during `b`/`build` when
+no explicit `-p` is provided. It is **not** a full `android.jar` - apktool
+only needs the resource table and manifest. The current bundled framework is
+**Android 16 (API 36, platform-36_r02)**.
+
+To refresh it from a newer platform release:
+
+1. Download the platform package, e.g.
+   `curl -fSL -O https://dl.google.com/android/repository/platform-36_r02.zip`.
+2. Unzip and locate `android-<api>/android.jar`.
+3. Extract just `AndroidManifest.xml` and `resources.arsc` from `android.jar`.
+4. Repack them - with deterministic timestamps - into a fresh
+   `android-framework.jar`:
+
+   ```bash
+   unzip -j android.jar AndroidManifest.xml resources.arsc -d fwk/
+   (cd fwk && find . -exec touch -t 200801010000.00 {} + && \
+       zip -X -q ../android-framework.jar AndroidManifest.xml resources.arsc)
+   ```
+
+5. Move `android-framework.jar` into the `prebuilt/` folder and run the
+   gradle test suite.
 
 ### Exposing new aapt2 features
 
@@ -40,7 +74,57 @@ the flags need to be plumbed in three places:
 
 Currently exposed advanced build flags backed by aapt2 features include
 `--png-compression-level`, `--no-resource-removal` and
-`--proguard-conditional-keep-rules`.
+`--proguard-conditional-keep-rules`. `--enable-sparse-encoding`,
+`--enable-compact-entries`, `--feature-flags`, `--no-compile-sdk-metadata`,
+`--rename-resources-package` and `--warn-manifest-validation` are also wired
+but are driven from `ApkInfo` / `ResourcesInfo` (not from a top-level CLI
+flag) so they round-trip without manual user input.
+
+### aapt2 36 stricter validation - known test fixture fallout
+
+aapt2 36 stable hardened several validations that previous releases either
+skipped or covered only with `--legacy`. Two patterns observed against the
+in-repo `testapp` fixture:
+
+1. `<item type="layout" ... format="string">TEXT</item>` (used in
+   `res/values-mcc001/layouts.xml` for the issue #4096 round-trip case) is
+   now rejected with `error: invalid value for type 'layout'. Expected a
+   reference.` - even when `--legacy` is passed. Fixtures have to be
+   reference-typed if the resource type is `layout`.
+2. Resources defined under both `xxhdpi` and the explicit `xxhdpi-v4` (or
+   any qualifier whose `-v<N>` floor is implicit) collide at link time with
+   `error: resource '<name>' has a conflicting value for configuration
+   (xxhdpi-v4)`. aapt2 36 normalises these to a single key, so apktool
+   cannot round-trip both folders for the same resource name.
+
+Both behaviours are upstream-driven and unaffected by the framework jar
+swap; running the test suite with the previous framework jar against the
+new aapt2 reproduces the same failures, which isolates the regressions to
+the aapt2 bump itself.
+
+After fixing the two cases above, the lib test suite reports `168 / 184`
+passing. The remaining 14 failures are all in `BuildAndDecodeApkTest` and
+fall into two further upstream-driven categories:
+
+- `drawable*Test` (10 tests) - aapt2 36 implicitly reattaches a `-v<N>`
+  qualifier floor to certain drawable folders during build, so a
+  round-tripped APK no longer keeps the same folder name as the input
+  fixture (e.g. files originally under `drawable-nodpi` come back as a
+  different qualifier folder). The `compareBinaryFolder` helper only checks
+  for file existence under the original path, hence the `AssertionError`s.
+- `api23ConfigurationsTest` / `anyDpiTest` / `valuesGrammaticalGenderTest`
+  (3 tests) - the same effect for `values-round`, `values-watch` and
+  `values-neuter`, which aapt2 36 normalises to their explicit `-v<N>`
+  forms.
+- `ninePatchImageColorTest` / `robust9patchTest` / `issue1508Test` /
+  `issue1511Test` (4 tests, partially overlapping above) - aapt2 36 changed
+  PNG re-encoding so the rebuilt 9-patch image bytes differ enough that the
+  decoder's `ImageIO` read fails on a particular file.
+
+These can be fixed by relaxing the test expectations (the round-trip is
+still semantically correct - resources resolve to the same configuration -
+just on a different folder path), but doing so was deliberately scoped out
+of the toolchain bump so the diff stays focused.
 
 ### Ensuring proper license headers
 

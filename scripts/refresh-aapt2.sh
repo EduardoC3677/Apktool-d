@@ -16,11 +16,11 @@
 # nor by CI - bumping aapt2 is an explicit, reviewed action.
 #
 # Usage:
-#   scripts/refresh-aapt2.sh                 # default build-tools version
-#   BUILD_TOOLS_VERSION=35.0.0 scripts/refresh-aapt2.sh
+#   scripts/refresh-aapt2.sh                 # default build-tools version (36.0.0)
+#   BUILD_TOOLS_VERSION=36.0.0 scripts/refresh-aapt2.sh
 #
 # Environment overrides:
-#   BUILD_TOOLS_VERSION   Build-tools package to install (e.g. 35.0.0).
+#   BUILD_TOOLS_VERSION   Build-tools package to install (e.g. 36.0.0).
 #   ANDROID_SDK_ROOT      Existing Android SDK location. If unset, a temporary
 #                         SDK is provisioned under .sisyphus/android-sdk/.
 #   PLATFORMS             Space-separated list of platforms to refresh.
@@ -41,9 +41,26 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 readonly PREBUILT_ROOT="${REPO_ROOT}/brut.apktool/apktool-lib/src/main/resources/prebuilt"
 
-BUILD_TOOLS_VERSION="${BUILD_TOOLS_VERSION:-35.0.0}"
+BUILD_TOOLS_VERSION="${BUILD_TOOLS_VERSION:-36.0.0}"
 PLATFORMS="${PLATFORMS:-linux macosx windows}"
 MIRROR_FROM_REMOTE="${MIRROR_FROM_REMOTE:-0}"
+
+# Map of major build-tools revisions to the matching `dl.google.com` archive
+# token. dl.google.com switched the separator in front of the platform suffix
+# from `-` (e.g. `build-tools_r34-linux.zip`) to `_` starting at r36
+# (e.g. `build-tools_r36_linux.zip`). The lookup below tracks that.
+remote_archive_token() {
+    local version="$1"
+    local platform="$2"
+    local major
+    major="${version%%.*}"
+
+    if (( major >= 36 )); then
+        printf 'build-tools_r%s_%s.zip' "${major}" "${platform}"
+    else
+        printf 'build-tools_r%s-%s.zip' "${version}" "${platform}"
+    fi
+}
 
 log()  { printf '[refresh-aapt2] %s\n' "$*" >&2; }
 fail() { log "ERROR: $*"; exit 1; }
@@ -146,7 +163,7 @@ mirror_from_remote() {
         *) fail "unknown platform: ${target_platform}" ;;
     esac
 
-    local zip_url="https://dl.google.com/android/repository/build-tools_r${BUILD_TOOLS_VERSION}-${remote_kind}.zip"
+    local zip_url="https://dl.google.com/android/repository/$(remote_archive_token "${BUILD_TOOLS_VERSION}" "${remote_kind}")"
     local tmp_zip tmp_dir
     tmp_zip="$(mktemp -t build-tools-${remote_kind}.XXXXXX.zip)"
     tmp_dir="$(mktemp -d -t build-tools-${remote_kind}.XXXXXX)"
