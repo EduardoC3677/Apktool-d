@@ -445,3 +445,42 @@ only wanting to run that one. The asterisk is used to the full path to the test 
 match this with the debugging parameter to debug a specific test. This command can be found below.
 
     ./gradlew :brut.apktool:apktool-lib:test --tests "*BuildAndDecodeTest" --debug-jvm
+
+# Toolchain & dependency policy
+
+## Java compatibility
+
+The minimum supported Java version is **11**. The CI matrix in
+`.github/workflows/build.yml` exercises **JDK 11, 17, and 21** across
+ubuntu/macOS/windows. Release artifacts in `build-release.yml` are built with
+**JDK 21**.
+
+The bytecode target is enforced through `options.release.set(11)` on every
+`JavaCompile` task in `build.gradle.kts`, which guarantees both source-level
+and bytecode-level Java 11 compatibility regardless of which JDK Gradle is
+running under (so a developer on JDK 21 cannot accidentally ship Java 21
+bytecode).
+
+JDK 8 is no longer supported; `javac --release 8` was removed when JDK 21
+flagged it as obsolete.
+
+## smali / baksmali source
+
+`smali` and `smali-baksmali` are pulled directly from **Google Maven**
+(`google()` repository, group `com.android.tools.smali`). They are **not**
+mirrored to Maven Central - any attempt to fetch them from `mavenCentral()`
+will 404. The previous JitPack source for `com.github.iBotPeaches.smali` is
+no longer used; do not re-add the JitPack repository unless Google stops
+publishing.
+
+To bump smali, check the canonical metadata file:
+`https://dl.google.com/android/maven2/com/android/tools/smali/smali/maven-metadata.xml`
+and update both `baksmali` and `smali` versions in
+`gradle/libs.versions.toml` (they are released in lockstep).
+
+## Other dependency bumps
+
+When bumping versions in `gradle/libs.versions.toml`, prefer canonical
+`maven-metadata.xml` over Maven Central's stale `solrsearch` results, which
+have been observed to lag releases for `commons-io` and `guava` by multiple
+versions.

@@ -31,6 +31,7 @@ import org.apache.commons.io.FilenameUtils;
 import java.io.InputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.util.Locale;
 import java.util.Map;
 
 public class ResFileDecoder {
@@ -55,10 +56,20 @@ public class ResFileDecoder {
         }
 
         // Get input file extension.
-        String ext = inFileName.endsWith(".9.png") ? "9.png" : FilenameUtils.getExtension(inFileName).toLowerCase();
+        String ext = inFileName.endsWith(".9.png")
+            ? "9.png"
+            : FilenameUtils.getExtension(inFileName).toLowerCase(Locale.ROOT);
+
+        // aapt2 strips extensions for some packed assets. When the extension is missing
+        // and the entry is not a "raw" file, sniff magic bytes to recover xml/png/9.png.
+        if (ext.isEmpty() && !entry.getType().getName().equals("raw")) {
+            String sniffed = detectByMagicBytes(inDir, inFileName);
+            if (sniffed != null) {
+                ext = sniffed;
+            }
+        }
 
         // Use aapt2-like logic to determine which decoder to use.
-        // TODO: Determine by magic bytes and fill in stripped extensions?
         Type type = Type.UNKNOWN;
         if (!ext.isEmpty() && !entry.getType().getName().equals("raw")) {
             switch (ext) {
@@ -102,6 +113,28 @@ public class ResFileDecoder {
             Log.w(TAG, "Could not decode file, replacing by NULL value: " + inFileName);
             entry.setValue(ResPrimitive.NULL);
         }
+    }
+
+    private static String detectByMagicBytes(Directory inDir, String inFileName) {
+        try (InputStream in = inDir.getFileInput(inFileName)) {
+            byte[] head = new byte[8];
+            int read = 0;
+            int off;
+            while (read < head.length && (off = in.read(head, read, head.length - read)) != -1) {
+                read += off;
+            }
+            if (read >= 4 && head[0] == 0x03 && head[1] == 0x00 && head[2] == 0x08 && head[3] == 0x00) {
+                return "xml";
+            }
+            if (read >= 8
+                    && (head[0] & 0xFF) == 0x89 && head[1] == 'P' && head[2] == 'N' && head[3] == 'G'
+                    && head[4] == '\r' && head[5] == '\n' && (head[6] & 0xFF) == 0x1A && head[7] == '\n') {
+                return "png";
+            }
+        } catch (DirectoryException | IOException ignored) {
+            // Best-effort sniffing only; fall through to UNKNOWN handling.
+        }
+        return null;
     }
 
     private void decode(Type type, Directory inDir, String inFileName, Directory outDir, String outFileName)

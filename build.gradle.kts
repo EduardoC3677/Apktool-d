@@ -60,14 +60,8 @@ plugins {
 allprojects {
     repositories {
         mavenCentral()
-        // Obtain baksmali/smali from source builds - https://github.com/iBotPeaches/smali
-        // Remove when official smali releases come out again.
-        maven {
-            url = uri("https://jitpack.io")
-            content {
-                includeGroup("com.github.iBotPeaches.smali")
-            }
-        }
+        // smali/baksmali are published only to Google Maven (not Maven Central).
+        // Required group: com.android.tools.smali
         google()
     }
 }
@@ -77,8 +71,8 @@ subprojects {
     apply(plugin = "java-library")
 
     java {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
     }
 
     val mavenProjects = arrayOf(
@@ -100,8 +94,6 @@ tasks.wrapper {
 }
 
 tasks.withType<JavaCompile> {
-    options.compilerArgs.add("-Xlint:-options")
-    options.compilerArgs.add("--release 8")
-
+    options.release.set(11)
     options.encoding = "UTF-8"
 }
