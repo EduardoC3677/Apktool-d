@@ -1,0 +1,246 @@
+name: opencode
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [opened, edited, reopened]
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: Prompt to run with OpenCode
+        required: true
+        type: string
+      model:
+        description: Model to run with OpenCode
+        required: false
+        default: anthropic/claude-opus-4-6
+        type: string
+
+concurrency:
+  group: opencode-${{ github.workflow }}-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  opencode:
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' ||
+        github.event_name == 'issues' ||
+        github.event_name == 'pull_request' ||
+        (
+          (github.event_name == 'issue_comment' || github.event_name == 'pull_request_review_comment') &&
+          (contains(github.event.comment.body, '/oc') || contains(github.event.comment.body, '/opencode')) &&
+          github.event.comment.user.type != 'Bot'
+        )
+      }}
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: write
+      statuses: write
+      security-events: write
+      discussions: write
+      attestations: write
+      artifact-metadata: write
+      repository-projects: write
+
+    env:
+      # Azure Foundry
+      AZURE_API_KEY: ${{ secrets.AZURE_FOUNDRY_API_KEY || secrets.AZURE_API_KEY }}
+      AZURE_RESOURCE_NAME: ${{ secrets.AZURE_FOUNDRY_RESOURCE_NAME || secrets.AZURE_RESOURCE_NAME }}
+      ANTHROPIC_API_KEY: ${{ secrets.AZURE_FOUNDRY_API_KEY || secrets.AZURE_API_KEY }}
+      RAW_MODEL: ${{ github.event.inputs.model || vars.OPENCODE_MODEL || 'anthropic/claude-opus-4-6' }}
+      GITHUB_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          
+
+      - name: Install repo dependencies (optional)
+        run: npm install --no-audit --no-fund 
+        
+      - name: Normalize model name
+        id: normalize_model
+        shell: bash
+        run: |
+          set -euo pipefail
+          raw="${RAW_MODEL}"
+
+          # Convert azure-cognitive-services/claude-* to anthropic/claude-*
+          if [[ "$raw" == azure-cognitive-services/claude-* ]]; then
+            fixed="${raw/azure-cognitive-services\//anthropic/}"
+          else
+            fixed="$raw"
+          fi
+
+          echo "model=$fixed" >> "$GITHUB_OUTPUT"
+          echo "Using model: $fixed"
+
+      - name: Create OpenCode auth.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+
+          if [ -z "${AZURE_API_KEY:-}" ]; then
+            echo "ERROR: AZURE_API_KEY is not set."
+            exit 1
+          fi
+
+          mkdir -p "$HOME/.local/share/opencode"
+          AUTH_FILE="$HOME/.local/share/opencode/auth.json"
+          printf '{"anthropic":{"type":"api","key":"%s"}}' "$AZURE_API_KEY" > "$AUTH_FILE"
+          python3 -c "import json; json.load(open('$AUTH_FILE')); print('auth.json created and validated.')"
+
+      - name: Install OCX + profile ws
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://ocx.kdco.dev/install.sh | sh
+          ocx init --global
+          ocx profile add ws --source tweak/p-nznulpk8 --from https://tweakoc.com/r --global
+          
+          echo "==> ws profile contents:"
+          ls -lah "$HOME/.config/opencode/profiles/ws" || true
+
+      # Evita que un config del repo (si existe) pise el perfil.
+      # OpenCode carga config de proyecto con precedencia alta. [1](https://opencode.ai/docs/config/)
+      - name: Neutralize repo OpenCode config (if present)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f "$GITHUB_WORKSPACE/opencode.json" ]; then
+            mv "$GITHUB_WORKSPACE/opencode.json" "$GITHUB_WORKSPACE/opencode.json.bak"
+            echo "Moved opencode.json -> opencode.json.bak to avoid overriding profile config"
+          fi
+          if [ -f "$GITHUB_WORKSPACE/opencode.jsonc" ]; then
+            mv "$GITHUB_WORKSPACE/opencode.jsonc" "$GITHUB_WORKSPACE/opencode.jsonc.bak"
+            echo "Moved opencode.jsonc -> opencode.jsonc.bak to avoid overriding profile config"
+          fi
+
+      - name: Patch ws opencode.jsonc (set Azure Foundry baseURL) + export OPENCODE_CONFIG
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+
+          if [ -z "${AZURE_RESOURCE_NAME:-}" ]; then
+            echo "ERROR: AZURE_RESOURCE_NAME is not set."
+            exit 1
+          fi
+
+          CONFIG_FILE="$HOME/.config/opencode/profiles/ws/opencode.jsonc"
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "ERROR: ws profile OpenCode config not found: $CONFIG_FILE"
+            ls -R "$HOME/.config/opencode/profiles" || true
+            exit 1
+          fi
+
+          BASE_URL="https://${AZURE_RESOURCE_NAME}.services.ai.azure.com/anthropic/v1"
+          echo "==> Setting baseURL: $BASE_URL"
+          echo "==> Target config: $CONFIG_FILE"
+
+          python3 - << 'PY'
+          import os, re, json
+
+          path = os.environ["CONFIG_FILE"]
+          base_url = os.environ["BASE_URL"]
+
+          text = open(path, "r", encoding="utf-8").read()
+
+          # Minimal JSONC -> JSON: remove // line comments and /* */ blocks
+          text2 = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+          text2 = re.sub(r"^[ \t]*//.*?$", "", text2, flags=re.M)
+
+          cfg = json.loads(text2)
+
+          provider = cfg.get("provider", {})
+          anthropic = provider.get("anthropic", {})
+          options = anthropic.get("options", {})
+
+          # ONLY add baseURL, keep agents + MCP as installed by OCX
+          options["baseURL"] = base_url
+          anthropic["options"] = options
+          provider["anthropic"] = anthropic
+          cfg["provider"] = provider
+
+          with open(path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
+
+          print("Patched OK:", path)
+          PY
+
+          # Force OpenCode to use this exact config file. [1](https://opencode.ai/docs/config/)
+          echo "OPENCODE_CONFIG=$CONFIG_FILE" >> "$GITHUB_ENV"
+          echo "OPENCODE_CONFIG_DIR=$HOME/.config/opencode/profiles/ws" >> "$GITHUB_ENV"
+          echo "==> OPENCODE_CONFIG exported"
+          echo "==> Final config:"
+          cat "$CONFIG_FILE"
+
+        env:
+          CONFIG_FILE: /home/runner/.config/opencode/profiles/ws/opencode.jsonc
+          BASE_URL: ${{ format('https://{0}.services.ai.azure.com/anthropic/v1', env.AZURE_RESOURCE_NAME) }}
+     
+
+      - name: Run OpenCode for command comments (incluye reviews)
+        if: >-
+          ${{
+            github.event_name == 'issue_comment' ||
+            github.event_name == 'pull_request_review_comment'
+          }}
+        uses: anomalyco/opencode/github@latest
+        continue-on-error: true
+        with:
+          model: ${{ steps.normalize_model.outputs.model }}
+
+      - name: Run OpenCode for issues/PR/workflow_dispatch
+        if: >-
+          ${{
+            github.event_name != 'issue_comment' &&
+            github.event_name != 'pull_request_review_comment'
+          }}
+        uses: anomalyco/opencode/github@latest
+        continue-on-error: true
+        with:
+          model: ${{ steps.normalize_model.outputs.model }}
+          prompt: >-
+            ${{
+              github.event_name == 'workflow_dispatch' && github.event.inputs.prompt ||
+              github.event_name == 'issues' && format('Analyze issue #{0} and implement the required repository changes.', github.event.issue.number) ||
+              github.event_name == 'pull_request' && format('Review pull request #{0}, apply needed fixes, and update the branch when required.', github.event.pull_request.number) ||
+              ''
+            }}
+            
+      - name: Mostrar logs de opencode
+        if: always()   # importante para que corra aunque falle el job
+        run: |
+          echo "Mostrando logs..."
+          ls -lah /home/runner/.local/share/opencode/log || true
+          echo "---- LOG CONTENT ----"
+          cat /home/runner/.local/share/opencode/log/*.log || true
+      - name: Subir logs como artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencode-logs
+          path: /home/runner/.local/share/opencode/log/*.log
+          if-no-files-found: warn
+    
