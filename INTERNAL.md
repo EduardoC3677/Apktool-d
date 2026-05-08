@@ -488,3 +488,87 @@ When bumping versions in `gradle/libs.versions.toml`, prefer canonical
 `maven-metadata.xml` over Maven Central's stale `solrsearch` results, which
 have been observed to lag releases for `commons-io` and `guava` by multiple
 versions.
+
+# Hardened build path for obfuscated apks
+
+Apps that aggressively defend against re-engineering (TikTok being the
+canonical example) ship payloads that break the default `apktool b` path
+in three independent ways. As of the changes made on this branch, all
+three are auto-detected and worked around. None of the workarounds
+compromise normal apks.
+
+## 1. Empty / non-PNG `.png` resources
+
+Some apps include thousands of zero-byte placeholder files with the
+`.png` extension. When the file is shipped in the original apk it is
+just a stored zip entry with size 0; aapt2 was never asked to compile
+it. On rebuild, `apktool` writes the file back into `res/<type>/<name>.png`
+and `aapt2 compile --dir <res>` then tries to crunch it, fails with
+"file does not start with PNG signature", and aborts the entire build.
+
+`ApkBuilder.quarantineUncompilableResources` runs before `aapt2 compile`,
+moves every `.png` whose first 8 bytes are not the PNG signature
+(`89 50 4E 47 0D 0A 1A 0A`) to a temporary directory, leaves a
+deterministic 1×1 transparent stub PNG in its place so aapt2 produces
+a valid `.flat` and the resource id stays defined, then post-link
+overwrites the compiled stub in the staging directory with the original
+zero-byte payload before the final zip step. The result is an apk that
+is byte-identical to the original for those entries.
+
+CLI flag: `--no-resource-quarantine` restores strict aapt2 behavior.
+Config knob: `Config#setResourceQuarantine(false)`.
+Default: enabled.
+
+## 2. `<meta-data android:resource="@<other-pkg>:type/name">`
+
+Apps that ship Dynamic Feature / Play Asset Delivery splits embed
+`<meta-data>` entries in the base apk's manifest that point at
+resources in a *different package* (e.g.
+`@com.zhiliaoapp.musically.df_live_cast:xml/splits0`). Those references
+resolve at install time through `PackageManager`; aapt2 link, however,
+treats them as link-time references and aborts with
+"resource not found".
+
+`ResXmlUtils.stripCrossPackageMetaData` removes such entries from the
+manifest before the rebuild and the original `.orig` file is restored
+afterwards. The runtime PackageManager lookup is unaffected because the
+splits ride on a separate apk anyway.
+
+CLI flag: `--keep-cross-package-metadata` keeps them (use only when you
+have already linked the referenced split packages in the same build).
+Config knob: `Config#setStripCrossPackageMetaData(false)`.
+Default: enabled.
+
+## 3. App-package attributes mislabeled as `android:` in binary XML
+
+The most subtle defense: a layout's `XML_RES_ATTRIBUTE` chunk has
+`attr.name` pointing at a resource in the app package (`0x7f060e82` =
+`@attr/c1k`), which resolves correctly to `res-auto`, but the chunk's
+`attr.ns` deliberately points at the string-pool entry for
+`http://schemas.android.com/apk/res/android`. apktool would then write
+the attribute as `android:c1k="..."`, and aapt2 link would abort with
+"attribute android:c1k not found" because no such system attribute
+exists.
+
+Fix in `BinaryXmlResourceParser.getAttributeNamespace`: when the
+attribute's resource id is in the app package (`pkgId == 0x7f`) **and**
+the declared URI is `http://schemas.android.com/apk/res/android`, the
+resource id wins. The attribute is routed to res-auto via
+`getNonDefaultNamespaceUri`. Well-formed apks (where attr.ns honestly
+points at android) are unaffected because their attr.name resolves to
+a system resource id (`pkgId == 0x01`).
+
+`getNonDefaultNamespaceUri` itself was reworked to scan the live
+namespace stack for a non-android URI instead of indexing it with an
+attribute index (a long-standing latent bug).
+
+There is no opt-out flag; the heuristic is deterministic and only fires
+on the precise `(app-package id) ⊕ (android namespace)` mismatch.
+
+## 4. `apktool b` UX guard
+
+`apktool b` with no arguments used to silently default to the current
+directory and crash with `NoSuchFileException: ./apktool.yml` when run
+from anywhere except a decoded apk root. It now refuses up front with a
+short error and prints usage. `apktool b <dir>` is unchanged.
+

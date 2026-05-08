@@ -55,6 +55,8 @@ public class Config {
     private int mPngCompressionLevel;
     private boolean mNoResourceRemoval;
     private boolean mProguardConditionalKeepRules;
+    private boolean mResourceQuarantine;
+    private boolean mStripCrossPackageMetaData;
 
     public Config(String version) {
         mVersion = version;
@@ -87,6 +89,8 @@ public class Config {
         mPngCompressionLevel = -1;
         mNoResourceRemoval = false;
         mProguardConditionalKeepRules = false;
+        mResourceQuarantine = true;
+        mStripCrossPackageMetaData = true;
     }
 
     public String getVersion() {
@@ -301,5 +305,29 @@ public class Config {
 
     public void setProguardConditionalKeepRules(boolean enabled) {
         mProguardConditionalKeepRules = enabled;
+    }
+
+    /**
+     * Whether apktool should auto-detect resource files that aapt2 cannot
+     * compile (zero-byte PNGs, files with broken/missing image headers, etc.)
+     * and copy them straight into the final apk instead of feeding them to
+     * {@code aapt2 compile}. Some apps (notably TikTok) intentionally ship
+     * empty {@code .png} placeholders that cause {@code aapt2 compile} to
+     * abort with "failed to read PNG signature". Default: {@code true}.
+     */
+    public boolean isResourceQuarantine() {
+        return mResourceQuarantine;
+    }
+
+    public void setResourceQuarantine(boolean enabled) {
+        mResourceQuarantine = enabled;
+    }
+
+    public boolean isStripCrossPackageMetaData() {
+        return mStripCrossPackageMetaData;
+    }
+
+    public void setStripCrossPackageMetaData(boolean enabled) {
+        mStripCrossPackageMetaData = enabled;
     }
 }

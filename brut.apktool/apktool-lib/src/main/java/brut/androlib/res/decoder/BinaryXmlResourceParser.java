@@ -285,9 +285,21 @@ public class BinaryXmlResourceParser implements XmlPullParser {
             return NO_NAMESPACE;
         }
 
+        String uri = mStringPool != null ? mStringPool.getString(attr.ns) : null;
+
+        // Anti-RE protection: some apks (e.g. TikTok) deliberately mislabel
+        // attributes from the app package (0x7f) as living in the system
+        // android namespace. aapt2 link then aborts with
+        // "attribute android:<name> not found". The resource id is the source
+        // of truth, so route the attribute back to res-auto when we detect
+        // this specific inconsistency.
+        if (nameId.pkgId() == ResTable.APP_PACKAGE_ID
+                && uri != null && uri.equals(ResXmlUtils.ANDROID_RES_NS)) {
+            return getNonDefaultNamespaceUri(index);
+        }
+
         // Minifiers like removing the namespace, so we will fall back to default namespace unless the package ID of
         // the resource is private. We will grab the non-standard one.
-        String uri = mStringPool != null ? mStringPool.getString(attr.ns) : null;
         if (uri != null && !uri.isEmpty()) {
             return uri;
         }
@@ -579,13 +591,22 @@ public class BinaryXmlResourceParser implements XmlPullParser {
 
     private String getNonDefaultNamespaceUri(int pos) {
         String prefix = getNamespacePrefix(pos);
-        if (prefix == null) {
-            // If we are here, there is some clever obfuscation going on.
-            // Our reference points to the namespace are gone. We have the namespaces that can't be touched in the
-            // opening tag, though no known way to correlate them at this time, so return the res-auto namespace.
-            return ResXmlUtils.ANDROID_RES_NS_AUTO;
+        if (prefix != null) {
+            String uri = getNamespaceUri(pos);
+            if (uri != null && !uri.equals(ResXmlUtils.ANDROID_RES_NS)) {
+                return uri;
+            }
         }
-        return getNamespaceUri(pos);
+
+        int count = mNamespaces.getCurrentCount();
+        for (int i = count - 1; i >= 0; i--) {
+            String uri = getNamespaceUri(i);
+            if (uri != null && !uri.isEmpty() && !uri.equals(ResXmlUtils.ANDROID_RES_NS)) {
+                return uri;
+            }
+        }
+
+        return ResXmlUtils.ANDROID_RES_NS_AUTO;
     }
 
     private Attribute getAttribute(int index) {

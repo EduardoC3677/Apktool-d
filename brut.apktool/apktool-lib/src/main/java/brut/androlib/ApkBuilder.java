@@ -55,6 +55,7 @@ public class ApkBuilder {
     private SmaliBuilder mSmaliBuilder;
     private AaptInvoker mAaptInvoker;
     private BackgroundWorker mWorker;
+    private final Map<String, File> mQuarantinedResources = new LinkedHashMap<>();
 
     public ApkBuilder(File apkDir, Config config) {
         mApkDir = new ExtFile(apkDir);
@@ -278,6 +279,15 @@ public class ApkBuilder {
 
         ResXmlUtils.fixingPublicAttrsInProviderAttributes(manifest);
 
+        if (mConfig.isStripCrossPackageMetaData()) {
+            String ownPackage = mApkInfo.getResourcesInfo().getPackageName();
+            int removed = ResXmlUtils.stripCrossPackageMetaData(manifest, ownPackage);
+            if (removed > 0) {
+                Log.i(TAG, "Stripped " + removed + " cross-package <meta-data> entry/entries "
+                    + "(Dynamic Feature / Play Asset Delivery splits) that aapt2 link cannot resolve.");
+            }
+        }
+
         if (mConfig.isDebuggable()) {
             Log.i(TAG, "Setting 'debuggable' attribute to 'true' in AndroidManifest.xml...");
             ResXmlUtils.setApplicationDebugTagTrue(manifest);
@@ -327,6 +337,15 @@ public class ApkBuilder {
 
         ResXmlUtils.fixingPublicAttrsInProviderAttributes(manifest);
 
+        if (mConfig.isStripCrossPackageMetaData()) {
+            String ownPackage = mApkInfo.getResourcesInfo().getPackageName();
+            int removed = ResXmlUtils.stripCrossPackageMetaData(manifest, ownPackage);
+            if (removed > 0) {
+                Log.i(TAG, "Stripped " + removed + " cross-package <meta-data> entry/entries "
+                    + "(Dynamic Feature / Play Asset Delivery splits) that aapt2 link cannot resolve.");
+            }
+        }
+
         if (mConfig.isDebuggable()) {
             Log.i(TAG, "Setting 'debuggable' attribute to 'true' in AndroidManifest.xml...");
             ResXmlUtils.setApplicationDebugTagTrue(manifest);
@@ -353,8 +372,19 @@ public class ApkBuilder {
             throw new AndrolibException(ex);
         }
 
+        File quarantineDir = null;
+        if (mConfig.isResourceQuarantine()) {
+            quarantineDir = quarantineUncompilableResources(resDir);
+        }
+
         Log.i(TAG, "Building resources with " + AaptManager.getBinaryName() + "...");
-        mAaptInvoker.invoke(tmpFile, manifest, resDir);
+        try {
+            mAaptInvoker.invoke(tmpFile, manifest, resDir);
+        } finally {
+            if (quarantineDir != null) {
+                restoreQuarantinedResources(quarantineDir, resDir);
+            }
+        }
 
         try (ZipRODirectory tmpDir = new ZipRODirectory(tmpFile)) {
             tmpDir.copyToDir(outDir, "AndroidManifest.xml", "resources.arsc", "res");
@@ -364,11 +394,149 @@ public class ApkBuilder {
             OS.rmfile(tmpFile);
         }
 
+        if (quarantineDir != null) {
+            overwriteQuarantinedInOutput(outDir);
+        }
+
         // Restore original manifest.
         try {
             OS.mvfile(manifestOrig, manifest);
         } catch (BrutException ex) {
             throw new AndrolibException(ex);
+        }
+    }
+
+    private File quarantineUncompilableResources(File resDir) throws AndrolibException {
+        File quarantineDir;
+        try {
+            quarantineDir = Files.createTempDirectory("APKTOOL_QUARANTINE").toFile();
+        } catch (IOException ex) {
+            throw new AndrolibException(ex);
+        }
+
+        int count = 0;
+        File[] typeDirs = resDir.listFiles(File::isDirectory);
+        if (typeDirs == null) {
+            return quarantineDir;
+        }
+        for (File typeDir : typeDirs) {
+            File[] files = typeDir.listFiles(File::isFile);
+            if (files == null) {
+                continue;
+            }
+            for (File file : files) {
+                if (!isUncompilableByAapt2(file)) {
+                    continue;
+                }
+                String relPath = "res/" + typeDir.getName() + "/" + file.getName();
+                File staged = new File(quarantineDir, relPath);
+                File parent = staged.getParentFile();
+                if (parent != null) {
+                    OS.mkdir(parent);
+                }
+                try {
+                    OS.mvfile(file, staged);
+                    writeStubPng(file);
+                } catch (BrutException ex) {
+                    throw new AndrolibException(ex);
+                }
+                mQuarantinedResources.put(relPath, staged);
+                count++;
+            }
+        }
+        if (count > 0) {
+            Log.i(TAG, "Quarantined " + count + " uncompilable resource file(s) "
+                + "(empty/invalid PNGs); they will be packed verbatim into the apk.");
+        }
+        return quarantineDir;
+    }
+
+    private void restoreQuarantinedResources(File quarantineDir, File resDir) throws AndrolibException {
+        for (Map.Entry<String, File> entry : mQuarantinedResources.entrySet()) {
+            File original = new File(mApkDir, entry.getKey());
+            File parent = original.getParentFile();
+            if (parent != null) {
+                OS.mkdir(parent);
+            }
+            try {
+                OS.cpfile(entry.getValue(), original);
+            } catch (BrutException ex) {
+                throw new AndrolibException(ex);
+            }
+        }
+    }
+
+    private void overwriteQuarantinedInOutput(File outDir) throws AndrolibException {
+        for (Map.Entry<String, File> entry : mQuarantinedResources.entrySet()) {
+            String relPath = entry.getKey();
+            File compiled = new File(outDir, relPath);
+            if (!compiled.isFile()) {
+                continue;
+            }
+            try {
+                OS.cpfile(entry.getValue(), compiled);
+            } catch (BrutException ex) {
+                throw new AndrolibException(ex);
+            }
+        }
+    }
+
+    private static final byte[] STUB_PNG_1x1 = {
+        (byte) 0x89, (byte) 0x50, (byte) 0x4E, (byte) 0x47, (byte) 0x0D, (byte) 0x0A, (byte) 0x1A, (byte) 0x0A,
+        (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x0D, (byte) 0x49, (byte) 0x48, (byte) 0x44, (byte) 0x52,
+        (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x01, (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x01,
+        (byte) 0x08, (byte) 0x06, (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x1F, (byte) 0x15, (byte) 0xC4,
+        (byte) 0x89, (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x0B, (byte) 0x49, (byte) 0x44, (byte) 0x41,
+        (byte) 0x54, (byte) 0x78, (byte) 0x9C, (byte) 0x63, (byte) 0x60, (byte) 0x00, (byte) 0x02, (byte) 0x00,
+        (byte) 0x00, (byte) 0x05, (byte) 0x00, (byte) 0x01, (byte) 0x7A, (byte) 0x5E, (byte) 0xAB, (byte) 0x3F,
+        (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x49, (byte) 0x45, (byte) 0x4E, (byte) 0x44,
+        (byte) 0xAE, (byte) 0x42, (byte) 0x60, (byte) 0x82,
+    };
+
+    private static void writeStubPng(File file) throws AndrolibException {
+        try {
+            Files.write(file.toPath(), STUB_PNG_1x1);
+        } catch (IOException ex) {
+            throw new AndrolibException(ex);
+        }
+    }
+
+    /**
+     * A {@code .png} file that does not start with the 8-byte PNG signature
+     * (or is zero bytes) cannot be compiled by aapt2 and must be packed into
+     * the apk verbatim. Some real-world apps ship such placeholders.
+     * 9-patch files (".9.png") are handled the same way - if their PNG
+     * signature is missing/garbage, aapt2 cannot patch them either.
+     */
+    private static boolean isUncompilableByAapt2(File file) {
+        String name = file.getName().toLowerCase(Locale.ROOT);
+        if (!name.endsWith(".png")) {
+            return false;
+        }
+        long len = file.length();
+        if (len == 0L) {
+            return true;
+        }
+        if (len < 8L) {
+            return true;
+        }
+        try (InputStream in = Files.newInputStream(file.toPath())) {
+            byte[] sig = new byte[8];
+            int read = 0;
+            while (read < 8) {
+                int n = in.read(sig, read, 8 - read);
+                if (n < 0) {
+                    break;
+                }
+                read += n;
+            }
+            if (read < 8) {
+                return true;
+            }
+            return !(sig[0] == (byte) 0x89 && sig[1] == 'P' && sig[2] == 'N' && sig[3] == 'G'
+                  && sig[4] == 0x0D && sig[5] == 0x0A && sig[6] == 0x1A && sig[7] == 0x0A);
+        } catch (IOException ex) {
+            return true;
         }
     }
 

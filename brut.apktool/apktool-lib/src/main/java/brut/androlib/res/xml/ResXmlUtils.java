@@ -197,6 +197,56 @@ public final class ResXmlUtils {
     }
 
     /**
+     * Strips {@code <meta-data>} entries whose {@code android:resource} attribute
+     * references a resource from a package outside the apk being rebuilt
+     * (e.g. {@code @com.example.df_xxx:xml/splits0}). Such references are emitted
+     * by Dynamic Feature / Play Asset Delivery splits and resolve at install time
+     * via {@code PackageManager}, but cause {@code aapt2 link} to abort with
+     * "resource not found" because the referenced package isn't in the include
+     * list. Returns the number of stripped entries.
+     *
+     * @param file File for AndroidManifest.xml
+     * @param ownPackage The apk's own resource package name (entries pointing here are kept).
+     * @return Number of removed {@code <meta-data>} entries.
+     */
+    public static int stripCrossPackageMetaData(File file, String ownPackage) {
+        int removed = 0;
+        try {
+            Document doc = XmlUtils.loadDocument(file);
+            NodeList metaDataNodes = doc.getElementsByTagName("meta-data");
+            List<Node> toRemove = new ArrayList<>();
+            for (int i = 0; i < metaDataNodes.getLength(); i++) {
+                Node node = metaDataNodes.item(i);
+                NamedNodeMap attrs = node.getAttributes();
+                Node resourceAttr = attrs.getNamedItem("android:resource");
+                if (resourceAttr == null) {
+                    continue;
+                }
+                String value = resourceAttr.getNodeValue();
+                if (!value.startsWith("@") || !value.contains(":")) {
+                    continue;
+                }
+                int colon = value.indexOf(':');
+                int pkgStart = value.charAt(1) == '+' ? 2 : 1;
+                String pkg = value.substring(pkgStart, colon);
+                if (pkg.isEmpty() || pkg.equals("android") || pkg.equals(ownPackage)) {
+                    continue;
+                }
+                toRemove.add(node);
+            }
+            for (Node node : toRemove) {
+                node.getParentNode().removeChild(node);
+                removed++;
+            }
+            if (removed > 0) {
+                XmlUtils.saveDocument(doc, file);
+            }
+        } catch (IOException | SAXException | ParserConfigurationException | TransformerException ignored) {
+        }
+        return removed;
+    }
+
+    /**
      * Finds all feature flags set on permissions in AndroidManifest.xml.
      *
      * @param file File for AndroidManifest.xml
