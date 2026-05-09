@@ -197,62 +197,134 @@ public final class ResXmlUtils {
     }
 
     /**
-     * Strips {@code <meta-data>} entries whose {@code android:resource} attribute
-     * references a resource from a package outside the apk being rebuilt
-     * (e.g. {@code @com.example.df_xxx:xml/splits0}). Such references are emitted
-     * by Dynamic Feature / Play Asset Delivery splits and resolve at install time
-     * via {@code PackageManager}, but cause {@code aapt2 link} to abort with
-     * "resource not found" because the referenced package isn't in the include
-     * list. Returns the number of stripped entries.
+     * Sanitises cross-package resource references in AndroidManifest.xml that
+     * {@code aapt2 link} cannot resolve at rebuild time.
+     * <p>
+     * Modern apps (Dynamic Feature / Play Asset Delivery splits, e.g.
+     * {@code com.example.df_xxx}) embed references like
+     * {@code @com.example.df_xxx:xml/splits0} in the base manifest. These are
+     * resolved at install time by {@code PackageManager}, but cause
+     * {@code aapt2 link} to abort with "resource not found" because the
+     * referenced package is not in the include list.
+     * <p>
+     * Two transforms are applied:
+     * <ul>
+     *   <li>{@code <meta-data>} elements whose {@code android:resource} or
+     *       {@code android:value} points to a foreign package are removed.
+     *       These are runtime hints (e.g. {@code com.android.vending.splits},
+     *       {@code com.android.dynamic.apk.fused.modules}) and dropping them
+     *       does not change app behaviour at runtime when the splits are
+     *       absent at build time.</li>
+     *   <li>For every other element, attributes whose value is a cross-package
+     *       reference are rewritten to {@code @null}. Attributes such as
+     *       {@code android:icon}, {@code android:label}, {@code android:roundIcon},
+     *       {@code android:logo}, {@code android:banner} or
+     *       {@code android:appComponentFactory} cannot be safely removed
+     *       because the platform expects them; rewriting to {@code @null}
+     *       lets aapt2 link succeed and the runtime falls back to the
+     *       value declared higher up the manifest tree.</li>
+     * </ul>
      *
-     * @param file File for AndroidManifest.xml
-     * @param ownPackage The apk's own resource package name (entries pointing here are kept).
-     * @return Number of removed {@code <meta-data>} entries.
+     * @param file       File for AndroidManifest.xml
+     * @param ownPackage The apk's own resource package name (entries pointing
+     *                   here, to {@code android}, or to no package are kept).
+     * @return Total number of strip + rewrite operations performed.
      */
     public static int stripCrossPackageMetaData(File file, String ownPackage) {
         // Without an own-package reference, we cannot reliably distinguish a
         // cross-package reference from a self-reference, so the heuristic is
-        // skipped to avoid incorrectly removing valid <meta-data> entries.
+        // skipped to avoid incorrectly removing valid entries.
         if (ownPackage == null || ownPackage.isEmpty()) {
             return 0;
         }
-        int removed = 0;
+        int fixes = 0;
         try {
             Document doc = XmlUtils.loadDocument(file);
+
+            // Pass 1: remove <meta-data> nodes whose android:resource or
+            // android:value points to a foreign package.
             NodeList metaDataNodes = doc.getElementsByTagName("meta-data");
             List<Node> toRemove = new ArrayList<>();
             for (int i = 0; i < metaDataNodes.getLength(); i++) {
                 Node node = metaDataNodes.item(i);
                 NamedNodeMap attrs = node.getAttributes();
-                Node resourceAttr = attrs.getNamedItem("android:resource");
-                if (resourceAttr == null) {
-                    continue;
+                if (isCrossPackageReference(attrs.getNamedItem("android:resource"), ownPackage)
+                        || isCrossPackageReference(attrs.getNamedItem("android:value"), ownPackage)) {
+                    toRemove.add(node);
                 }
-                String value = resourceAttr.getNodeValue();
-                if (value == null || value.length() < 3 || !value.startsWith("@") || !value.contains(":")) {
-                    continue;
-                }
-                int colon = value.indexOf(':');
-                int pkgStart = value.charAt(1) == '+' ? 2 : 1;
-                if (colon <= pkgStart) {
-                    continue;
-                }
-                String pkg = value.substring(pkgStart, colon);
-                if (pkg.isEmpty() || pkg.equals("android") || pkg.equals(ownPackage)) {
-                    continue;
-                }
-                toRemove.add(node);
             }
             for (Node node : toRemove) {
                 node.getParentNode().removeChild(node);
-                removed++;
+                fixes++;
             }
-            if (removed > 0) {
+
+            // Pass 2: rewrite cross-package references in any other attribute
+            // (e.g. android:icon, android:label, android:appComponentFactory)
+            // to @null so aapt2 link does not abort. We skip <meta-data>
+            // because pass 1 already handled (or kept) those.
+            fixes += rewriteCrossPackageAttributes(doc.getDocumentElement(), ownPackage);
+
+            if (fixes > 0) {
                 XmlUtils.saveDocument(doc, file);
             }
         } catch (IOException | SAXException | ParserConfigurationException | TransformerException ignored) {
         }
-        return removed;
+        return fixes;
+    }
+
+    /**
+     * @return {@code true} when the attribute value parses as a resource
+     *         reference whose package is not empty, not {@code android}, and
+     *         not the apk's own package.
+     */
+    private static boolean isCrossPackageReference(Node attr, String ownPackage) {
+        if (attr == null) {
+            return false;
+        }
+        String value = attr.getNodeValue();
+        if (value == null || value.length() < 3 || !value.startsWith("@") || !value.contains(":")) {
+            return false;
+        }
+        int pkgStart = value.charAt(1) == '+' ? 2 : 1;
+        int colon = value.indexOf(':', pkgStart);
+        if (colon <= pkgStart) {
+            return false;
+        }
+        String pkg = value.substring(pkgStart, colon);
+        return !pkg.isEmpty() && !pkg.equals("android") && !pkg.equals(ownPackage);
+    }
+
+    /**
+     * Walks {@code element} and its descendants and rewrites every attribute
+     * whose value is a cross-package resource reference to {@code @null}.
+     * {@code <meta-data>} subtrees are skipped because the higher-level pass
+     * has already decided their fate.
+     *
+     * @return Number of rewritten attributes.
+     */
+    private static int rewriteCrossPackageAttributes(Node element, String ownPackage) {
+        if (element == null || element.getNodeType() != Node.ELEMENT_NODE) {
+            return 0;
+        }
+        if ("meta-data".equals(element.getNodeName())) {
+            return 0;
+        }
+        int rewritten = 0;
+        NamedNodeMap attrs = element.getAttributes();
+        if (attrs != null) {
+            for (int i = 0; i < attrs.getLength(); i++) {
+                Node attr = attrs.item(i);
+                if (isCrossPackageReference(attr, ownPackage)) {
+                    attr.setNodeValue("@null");
+                    rewritten++;
+                }
+            }
+        }
+        NodeList children = element.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            rewritten += rewriteCrossPackageAttributes(children.item(i), ownPackage);
+        }
+        return rewritten;
     }
 
     /**
