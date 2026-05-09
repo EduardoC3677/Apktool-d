@@ -281,9 +281,9 @@ public class ApkBuilder {
 
         if (mConfig.isStripCrossPackageMetaData()) {
             String ownPackage = mApkInfo.getResourcesInfo().getPackageName();
-            int removed = ResXmlUtils.stripCrossPackageMetaData(manifest, ownPackage);
-            if (removed > 0) {
-                Log.i(TAG, "Stripped " + removed + " cross-package <meta-data> entry/entries "
+            int fixes = ResXmlUtils.stripCrossPackageMetaData(manifest, ownPackage);
+            if (fixes > 0) {
+                Log.i(TAG, "Sanitised " + fixes + " cross-package manifest reference(s) "
                     + "(Dynamic Feature / Play Asset Delivery splits) that aapt2 link cannot resolve.");
             }
         }
@@ -339,9 +339,9 @@ public class ApkBuilder {
 
         if (mConfig.isStripCrossPackageMetaData()) {
             String ownPackage = mApkInfo.getResourcesInfo().getPackageName();
-            int removed = ResXmlUtils.stripCrossPackageMetaData(manifest, ownPackage);
-            if (removed > 0) {
-                Log.i(TAG, "Stripped " + removed + " cross-package <meta-data> entry/entries "
+            int fixes = ResXmlUtils.stripCrossPackageMetaData(manifest, ownPackage);
+            if (fixes > 0) {
+                Log.i(TAG, "Sanitised " + fixes + " cross-package manifest reference(s) "
                     + "(Dynamic Feature / Play Asset Delivery splits) that aapt2 link cannot resolve.");
             }
         }
